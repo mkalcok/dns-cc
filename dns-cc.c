@@ -1,1 +1,0 @@
-/home/kauchman/NetBeansProjects/dnscc/dnscc.c
