@@ -48,48 +48,44 @@ char* bintostr(char *binstring){                                                
         toparse[0] = dec;                                                       /*konverzia int to char*/
         strncat(output, toparse, 1);                                            /*prilepenie vysledneho znaku na koniec retazca*/
     }
-printf("%s\n",output);    
     return output;
 }
 
 void readmsg(char *key){
     int i, y= 0, endofmsg = 0;
     char name[255];
-    char seq[10];
-    char tld[4] = ".sk";
     char bit[2];
     char *binmessage = (char *) malloc(250);
-    while(endofmsg != 1){
-        endofmsg = 1;
+    while (endofmsg != 1){
+	endofmsg = 1;
         for(i = y; i < y+8; i++){    
-            strcpy(name, key);
-            sprintf(seq, "%d", i);
-            strcat(name, seq);
-            strcat(name, tld);
+            strcpy(name, getname(key,i));
             sprintf(bit, "%d", iscached("208.67.222.222", name));
+            //printf("%s %c \n",name, bit[0]);
             strcat(binmessage, bit);
-            if(bit[0] == '1'){
-                endofmsg = 0;
-            }    
+	    if(bit[0] == '1'){
+	    endofmsg =0;
+	    }
         }
-        y += 8;
-    }
-    bintostr(binmessage);
+   y += 8; 
+   }
+   printf("%s \n",bintostr(binmessage));
+free(binmessage);
 }
+
 void sendmsg(char *binmessage, char *key ){
     int i;
     char bit[1];
-    char cmd[20] = "dig @208.67.222.222 ";
+    char cmd[25] = "dig @208.67.222.222 ";
     char pipe[15] = " > /dev/null";
     char query[300];
     
     for(i = 0; i < strlen(binmessage); i++){
         strcpy(query, cmd);
-        //printf("%s \n", getname(key, i));
         strncpy(bit, binmessage + i, 1);
         if(bit[0] == '1'){
             strcat(query, getname(key, i));
-            strcat(query, pipe);
+	    strcat(query, pipe);
             system(query);
         }
         
@@ -98,11 +94,11 @@ void sendmsg(char *binmessage, char *key ){
 }
 
 char* strtobin(char *input){                                                    /*funkcia transformuje string na binarny retazec*/
-int i, y, dec, bin;                                                             /*inicializacia premennych*/
-char toparse[1];
-char *output = malloc((strlen(input) * 8)+1);/*MEMORY LEAK?*/
+    int i, y, dec, bin;                                                             /*inicializacia premennych*/
+    char toparse[1];
+    char *output = malloc((strlen(input) * 8)+1);/*MEMORY LEAK?*/
 
-for(i = 0; i < strlen(input) -1; i++){                                          /*cyklus prechadza string po znakoch*/
+    for(i = 0; i < strlen(input) -1; i++){                                          /*cyklus prechadza string po znakoch*/
         strncpy(toparse, input + i, 1);                                         /*vyber jedneho pismena*/
         dec = toparse[0];                                                       /*char to int*/
         //printf("%c - %d - ", toparse[0], dec);        
@@ -172,7 +168,7 @@ int iscached(char *server, char *name){                                         
 
 int main(int argc, char** argv) {
     //char *server = argv[1];
-    char message[140];
+    char message[140], name[250];
     FILE *fp;
     
     fp = fopen("sample.msg", "r");
@@ -187,19 +183,24 @@ int main(int argc, char** argv) {
     fclose(fp);
     char *binmessage;
     binmessage = strtobin(message);
+    
+    printf("Vlozte dns meno (len meno, ziadne tld ani www):");
+    scanf("%s", name);
+    //printf("\n%s\n", name);
 
     int c;
     while((c = getopt(argc, argv, "sr")) != -1){
         switch (c){
             case 's':
-                sendmsg(binmessage, "fasj02daasdasdslkmkls");
+		sendmsg(binmessage, name);
                 break;
             case 'r':
-                readmsg("fasj05daasdasdslkmkls");
+		readmsg(name);
                 break;                      
         }
-    }
-    
-   
+   }
+
+   //sendmsg(binmessage, "1asfdfsafcasadfadsf");
+   //readmsg("1asfdfsafcasadfadsf");
     return (EXIT_SUCCESS);
 }
