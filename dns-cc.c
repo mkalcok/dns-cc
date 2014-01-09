@@ -8,18 +8,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <time.h>
-#include <math.h>
-
 
 /*
  * 
  */
+
 int _pow(int base, int exp){                                                    /*rekurzivna funkcia na vypocet mocniny base^exp*/
     return exp == 0 ? 1 : base * _pow(base, exp - 1); 
 }
 
+char* getname(char *key, int seq){                                              /*Funkcia generuje dns meno, bude komplexnejsia zatial je to len zakladny navrh kvoli testu funkcnosti*/
+    char charseq[10];                                                           /*inicializacia uvodnych premennych*/
+    char domain2[10] = "www.";
+    char tld[5] = ".sk";
+    char *output = (char *) malloc((sizeof(char)) * 255);
+    sprintf(charseq, "%d", seq);                                                /*sekvencne cislo ktore bolo ako argument funkcie sa konvertuje int -> string*/
+    
+    strcat(output, domain2);                                                    /*strcat posklada vysledne meno*/
+    strcat(output, key);
+    strcat(output, charseq);
+    strcat(output, tld);
+    
+    return output;
+}
+
+void send(char *binmessage, char *key ){
+    int i;
+    char bit[1];
+    char cmd[20] = "dig @208.67.222.222 ";
+    char pipe[15] = " > /dev/null";
+    char query[300];
+    
+    for(i = 0; i < strlen(binmessage); i++){
+        strcpy(query, cmd);
+        //printf("%s \n", getname(key, i));
+        strncpy(bit, binmessage + i, 1);
+        if(bit[0] == '1'){
+            strcat(query, getname(key, i));
+            strcat(query, pipe);
+            system(query);
+        }
+        
+    }
+    printf("\n");
+}
 char* bintostr(char *binstring){                                                /*funkcia transformuje binarny retazec do stringu*/
     int i, y = 0, power, dec;                                                   /*inicializacia premennych*/
     char toparse[1], *output = (char *) malloc(strlen(binstring)/8 +1);/*MEMORY LEAK!*/
@@ -129,9 +161,24 @@ int main(int argc, char** argv) {
     fclose(fp);
     char *binmessage;
     binmessage = strtobin(message);
-    printf("%s\n", binmessage);
-    printf("%s\n", bintostr(binmessage));
+    //Odkomentovat pre poslanie spravy
+    //send(binmessage, "fasj02daasdasdslkmkls");
+  
     
-    //iscached("208.67.222.222", "www.fasj01daasdasdslkmkls.sk");
+    //Odkomentovat pre precitanie spravy
+    /*int i;
+    char basic[50] ="www.fasj02daasdasdslkmkls";
+    char name[255];
+    char seq[10];
+    char tld[4] = ".sk";
+    for(i = 0; i < strlen(binmessage); i++){
+        strcpy(name, basic);
+        sprintf(seq, "%d", i);
+        strcat(name, seq);
+        strcat(name, tld);
+        //printf("%s\n", name);
+        printf("%s - cahced=%d \n", name, iscached("208.67.222.222", name));
+    }*/
+    
     return (EXIT_SUCCESS);
 }
