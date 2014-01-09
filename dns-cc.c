@@ -51,36 +51,36 @@ char* bintostr(char *binstring){                                                
     return output;
 }
 
-void readmsg(char *key){
-    int i, y= 0, endofmsg = 0;
+void readmsg(char *key){							/*Funkcia  cita spravu z dns mien odvodenych z char *key */
+    int i, y= 0, endofmsg = 0;							/*inicializacia uvodnych premennych*/
     char name[255];
     char bit[2];
-    char *binmessage = (char *) malloc(250);
-    while (endofmsg != 1){
-	endofmsg = 1;
-        for(i = y; i < y+8; i++){    
-            strcpy(name, getname(key,i));
-            sprintf(bit, "%d", iscached("208.67.222.222", name));
+    char *binmessage = (char *) malloc(1600);
+    while (endofmsg != 1){							/*While cyklus prechadza jednotlive bajty spravy zatial co vnoreny for cyklus prechadza tieto bajty po bitoch, opakuje sa az kym for cyklus nenajde bajt plny nulovych bitov (sprava skoncila)*/
+	endofmsg = 1;								/*na zaciatku kazdeho cyklu predpokladame ze tento bajt je posledny*/
+        for(i = y; i < y+8; i++){    						/*for cyklus prejde 8 bitov ktore zapise do vystupneho binarneho retazca binstring, ak narazi na '1' zapise do premennej endofmsg hodnotu 0 cim indikuje ze nejde o posledny bajt*/
+            strcpy(name, getname(key,i));					/*z kluca a cisla iteracie vygenerujeme plne dns meno funkciou getname()*/
+            sprintf(bit, "%d", iscached("208.67.222.222", name));		/*DNS zaznam sa otestuje ci je zacacheovany a vysledok sa pretypuje int -> string*/
             //printf("%s %c \n",name, bit[0]);
-            strcat(binmessage, bit);
-	    if(bit[0] == '1'){
+            strcat(binmessage, bit);						/*vysledok sa prilepy na koniec retazca binmessage*/
+	    if(bit[0] == '1'){							/*ak je vysledok '1', indikuje to ze nejde o posledny bajt a podla toho sa nastavi aj premenna endofmsg */
 	    endofmsg =0;
 	    }
         }
-   y += 8; 
+   y += 8; 									/*pocitadlo sa posunien a zaciatok dalsieho bajtu*/
    }
-   printf("%s \n",bintostr(binmessage));
-free(binmessage);
+   printf("%s \n",bintostr(binmessage));					/*sprava sa posle funkcii bintostr() aby sa prelozil bitovy retazec na text a vypise sa*/
+free(binmessage);								/*uvolni sa alokovana pamat*/
 }
 
-void sendmsg(char *binmessage, char *key ){
-    int i;
+void sendmsg(char *binmessage, char *key ){					/*vunkcia zapise bitovu spravu binmessage na DNS server podla kluca key*/
+    int i;									/*inicializacia uvodnych premennych*/
     char bit[1];
-    char cmd[25] = "dig @208.67.222.222 ";
-    char pipe[15] = " > /dev/null";
+    char cmd[25] = "dig @208.67.222.222 ";					/*samotny prikaz*/
+    char pipe[15] = " > /dev/null";						/*pipe sa prilepy nakoniec aby sme sa zbavily textoveho vystupu programu*/
     char query[300];
     
-    for(i = 0; i < strlen(binmessage); i++){
+    for(i = 0; i < strlen(binmessage); i++){					/*binmessage sa prechadza po bitoch a kde sa narazi na hodnotu jedna tam sa spravi DNS dotaz*/
         strcpy(query, cmd);
         strncpy(bit, binmessage + i, 1);
         if(bit[0] == '1'){
