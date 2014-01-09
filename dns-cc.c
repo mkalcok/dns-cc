@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <unistd.h>
 /*
  * 
  */
@@ -31,8 +31,52 @@ char* getname(char *key, int seq){                                              
     
     return output;
 }
+char* bintostr(char *binstring){                                                /*funkcia transformuje binarny retazec do stringu*/
+    int i, y = 0, power, dec;                                                   /*inicializacia premennych*/
+    char toparse[1], *output = (char *) malloc(strlen(binstring)/8 +1);/*MEMORY LEAK?*/
+    
+    for(i = 0; i < strlen(binstring); i += 8){                                  /*cyklus prechadza cely binarny retazec s krokom dlzky 8 (8bitov = 1bajt = 1char)*/
+        power = 7;                                                              /*pri kazdom kroku sa resetuje premenna power. tato sa pouziva pri ziskavani desiatkovej hodnoty z binarneho tvaru*/
+        dec = 0;                                                                /*pomocna premenna na ukladanie desiatkovej hodnoty pismena*/
+        for(y = 0; y < 8; y++ ){                                                /*cyklus prechadza 8bitov binarneho retazca*/
+            strncpy(toparse, binstring +i + y, 1);                              /*vyberie sa jeden bit*/
+            if(toparse[0] == 49){                                               /*ak je vybrany bit 1 (49 je ascii hodnota znaku '1')*/
+            dec += _pow(2, power);                                              /*k desiatkovej hodnote sa pripocita mocnina dvojky so sucasnym exponentom*/
+            }
+            power--;                                                            /*bitovy retazec sa cita od najvyznamnejsieho miesta preto exponent zacina na 7 a v kazdom cykle sa znizuje*/
+        }
+        toparse[0] = dec;                                                       /*konverzia int to char*/
+        strncat(output, toparse, 1);                                            /*prilepenie vysledneho znaku na koniec retazca*/
+    }
+printf("%s\n",output);    
+    return output;
+}
 
-void send(char *binmessage, char *key ){
+void readmsg(char *key){
+    int i, y= 0, endofmsg = 0;
+    char name[255];
+    char seq[10];
+    char tld[4] = ".sk";
+    char bit[2];
+    char *binmessage = (char *) malloc(250);
+    while(endofmsg != 1){
+        endofmsg = 1;
+        for(i = y; i < y+8; i++){    
+            strcpy(name, key);
+            sprintf(seq, "%d", i);
+            strcat(name, seq);
+            strcat(name, tld);
+            sprintf(bit, "%d", iscached("208.67.222.222", name));
+            strcat(binmessage, bit);
+            if(bit[0] == '1'){
+                endofmsg = 0;
+            }    
+        }
+        y += 8;
+    }
+    bintostr(binmessage);
+}
+void sendmsg(char *binmessage, char *key ){
     int i;
     char bit[1];
     char cmd[20] = "dig @208.67.222.222 ";
@@ -50,31 +94,13 @@ void send(char *binmessage, char *key ){
         }
         
     }
-    printf("\n");
+   // printf("\n");
 }
-char* bintostr(char *binstring){                                                /*funkcia transformuje binarny retazec do stringu*/
-    int i, y = 0, power, dec;                                                   /*inicializacia premennych*/
-    char toparse[1], *output = (char *) malloc(strlen(binstring)/8 +1);/*MEMORY LEAK!*/
-    
-    for(i = 0; i < strlen(binstring); i += 8){                                  /*cyklus prechadza cely binarny retazec s krokom dlzky 8 (8bitov = 1bajt = 1char)*/
-        power = 7;                                                              /*pri kazdom kroku sa resetuje premenna power. tato sa pouziva pri ziskavani desiatkovej hodnoty z binarneho tvaru*/
-        dec = 0;                                                                /*pomocna premenna na ukladanie desiatkovej hodnoty pismena*/
-        for(y = 0; y < 8; y++ ){                                                /*cyklus prechadza 8bitov binarneho retazca*/
-            strncpy(toparse, binstring +i + y, 1);                              /*vyberie sa jeden bit*/
-            if(toparse[0] == 49){                                               /*ak je vybrany bit 1 (49 je ascii hodnota znaku '1')*/
-            dec += _pow(2, power);                                              /*k desiatkovej hodnote sa pripocita mocnina dvojky so sucasnym exponentom*/
-            }
-            power--;                                                            /*bitovy retazec sa cita od najvyznamnejsieho miesta preto exponent zacina na 7 a v kazdom cykle sa znizuje*/
-        }
-        toparse[0] = dec;                                                       /*konverzia int to char*/
-        strncat(output, toparse, 1);                                            /*prilepenie vysledneho znaku na koniec retazca*/
-    }    
-    return output;
-}
+
 char* strtobin(char *input){                                                    /*funkcia transformuje string na binarny retazec*/
 int i, y, dec, bin;                                                             /*inicializacia premennych*/
 char toparse[1];
-char *output = malloc((strlen(input) * 8)+1);/*MEMORY LEAK!!!*/
+char *output = malloc((strlen(input) * 8)+1);/*MEMORY LEAK?*/
 
 for(i = 0; i < strlen(input) -1; i++){                                          /*cyklus prechadza string po znakoch*/
         strncpy(toparse, input + i, 1);                                         /*vyber jedneho pismena*/
@@ -133,10 +159,10 @@ int iscached(char *server, char *name){                                         
     initial = getdelay(server, name);                                           /*ziskanie prveho delayu*/
     treshold = initial / 5;                                                     /* threshhold je 20% z initial*/
     
-    printf("initial: %d\ntreshold: %d\n",initial, treshold);
+    //printf("initial: %d\ntreshold: %d\n",initial, treshold);
     for(i = 0; i<(sizeof(control) / sizeof(control[0])); i++){
         control[i] = getdelay(server, name);                                    /*ziskanie kontrolneho delayu*/
-        printf("control[%d]: %d\n",i , control[i]);
+        //printf("control[%d]: %d\n",i , control[i]);
         if (control[i] < (initial - treshold)){                                 /*kontrola ci je control[] mensi ako initial minus treshhold*/
             cached = 0;
         }else{cached = 1;}
@@ -161,24 +187,19 @@ int main(int argc, char** argv) {
     fclose(fp);
     char *binmessage;
     binmessage = strtobin(message);
-    //Odkomentovat pre poslanie spravy
-    //send(binmessage, "fasj02daasdasdslkmkls");
-  
+
+    int c;
+    while((c = getopt(argc, argv, "sr")) != -1){
+        switch (c){
+            case 's':
+                sendmsg(binmessage, "fasj02daasdasdslkmkls");
+                break;
+            case 'r':
+                readmsg("fasj05daasdasdslkmkls");
+                break;                      
+        }
+    }
     
-    //Odkomentovat pre precitanie spravy
-    /*int i;
-    char basic[50] ="www.fasj02daasdasdslkmkls";
-    char name[255];
-    char seq[10];
-    char tld[4] = ".sk";
-    for(i = 0; i < strlen(binmessage); i++){
-        strcpy(name, basic);
-        sprintf(seq, "%d", i);
-        strcat(name, seq);
-        strcat(name, tld);
-        //printf("%s\n", name);
-        printf("%s - cahced=%d \n", name, iscached("208.67.222.222", name));
-    }*/
-    
+   
     return (EXIT_SUCCESS);
 }
