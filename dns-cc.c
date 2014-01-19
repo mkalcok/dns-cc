@@ -17,11 +17,10 @@ int _pow(int base, int exp){                                                    
     return exp == 0 ? 1 : base * _pow(base, exp - 1); 
 }
 
-char* getname(char *key, int seq){                                              /*Funkcia generuje dns meno, bude komplexnejsia zatial je to len zakladny navrh kvoli testu funkcnosti*/
+void getname(char *output, char *key, int seq){                                 /*Funkcia generuje dns meno, bude komplexnejsia zatial je to len zakladny navrh kvoli testu funkcnosti*/
     char charseq[10];                                                           /*inicializacia uvodnych premennych*/
     char domain2[10] = "www.";
     char tld[5] = ".sk";
-    char *output = (char *) malloc((sizeof(char)) * 255);
     sprintf(charseq, "%d", seq);                                                /*sekvencne cislo ktore bolo ako argument funkcie sa konvertuje int -> string*/
     
     strcat(output, domain2);                                                    /*strcat posklada vysledne meno*/
@@ -29,11 +28,11 @@ char* getname(char *key, int seq){                                              
     strcat(output, charseq);
     strcat(output, tld);
     
-    return output;
+    return;
 }
-char* bintostr(char *binstring){                                                /*funkcia transformuje binarny retazec do stringu*/
+void bintostr(char *output, char *binstring){                                                /*funkcia transformuje binarny retazec do stringu*/
     int i, y = 0, power, dec;                                                   /*inicializacia premennych*/
-    char toparse[1], *output = (char *) malloc(strlen(binstring)/8 +1);/*MEMORY LEAK?*/
+    char toparse[1];
     
     for(i = 0; i < strlen(binstring); i += 8){                                  /*cyklus prechadza cely binarny retazec s krokom dlzky 8 (8bitov = 1bajt = 1char)*/
         power = 7;                                                              /*pri kazdom kroku sa resetuje premenna power. tato sa pouziva pri ziskavani desiatkovej hodnoty z binarneho tvaru*/
@@ -48,18 +47,20 @@ char* bintostr(char *binstring){                                                
         toparse[0] = dec;                                                       /*konverzia int to char*/
         strncat(output, toparse, 1);                                            /*prilepenie vysledneho znaku na koniec retazca*/
     }
-    return output;
+    return;
 }
 
 void readmsg(char *key){							/*Funkcia  cita spravu z dns mien odvodenych z char *key */
     int i, y= 0, endofmsg = 0;							/*inicializacia uvodnych premennych*/
-    char name[255];
     char bit[2];
     char *binmessage = (char *) malloc(1600);
+    char *name = (char *) malloc((sizeof(char)) * 255);
+    char *message = (char *) malloc(200);
     while (endofmsg != 1){							/*While cyklus prechadza jednotlive bajty spravy zatial co vnoreny for cyklus prechadza tieto bajty po bitoch, opakuje sa az kym for cyklus nenajde bajt plny nulovych bitov (sprava skoncila)*/
 	endofmsg = 1;								/*na zaciatku kazdeho cyklu predpokladame ze tento bajt je posledny*/
         for(i = y; i < y+8; i++){    						/*for cyklus prejde 8 bitov ktore zapise do vystupneho binarneho retazca binstring, ak narazi na '1' zapise do premennej endofmsg hodnotu 0 cim indikuje ze nejde o posledny bajt*/
-            strcpy(name, getname(key,i));					/*z kluca a cisla iteracie vygenerujeme plne dns meno funkciou getname()*/
+            strcpy(name, "");                                                   /*vynulovanie retazca pri kazdej iteracii cyklu*/
+            getname(name ,key,i);                                               /*z kluca a cisla iteracie vygenerujeme plne dns meno funkciou getname()*/
             sprintf(bit, "%d", iscached("208.67.222.222", name));		/*DNS zaznam sa otestuje ci je zacacheovany a vysledok sa pretypuje int -> string*/
             //printf("%s %c \n",name, bit[0]);
             strcat(binmessage, bit);						/*vysledok sa prilepy na koniec retazca binmessage*/
@@ -69,8 +70,12 @@ void readmsg(char *key){							/*Funkcia  cita spravu z dns mien odvodenych z ch
         }
    y += 8; 									/*pocitadlo sa posunien a zaciatok dalsieho bajtu*/
    }
-   printf("%s \n",bintostr(binmessage));					/*sprava sa posle funkcii bintostr() aby sa prelozil bitovy retazec na text a vypise sa*/
-free(binmessage);								/*uvolni sa alokovana pamat*/
+   bintostr(message, binmessage);						/*sprava sa posle funkcii bintostr() aby sa prelozil bitovy retazec na text a vypise sa*/
+   printf("%s \n",message);
+   free(binmessage);
+   free(name);
+   free(message);
+   return;										/*uvolni sa alokovana pamat*/
 }
 
 void sendmsg(char *binmessage, char *key ){					/*vunkcia zapise bitovu spravu binmessage na DNS server podla kluca key*/
@@ -78,25 +83,24 @@ void sendmsg(char *binmessage, char *key ){					/*vunkcia zapise bitovu spravu b
     char bit[1];
     char cmd[25] = "dig @208.67.222.222 ";					/*samotny prikaz*/
     char pipe[15] = " > /dev/null";						/*pipe sa prilepy nakoniec aby sme sa zbavily textoveho vystupu programu*/
-    char query[300];
+    char *query = (char *) malloc((sizeof(char)) * 255);
     
     for(i = 0; i < strlen(binmessage); i++){					/*binmessage sa prechadza po bitoch a kde sa narazi na hodnotu jedna tam sa spravi DNS dotaz*/
         strcpy(query, cmd);
         strncpy(bit, binmessage + i, 1);
         if(bit[0] == '1'){
-            strcat(query, getname(key, i));
+            getname(query, key, i);
 	    strcat(query, pipe);
             system(query);
         }
-        
     }
-   // printf("\n");
+   free(query);
+   return;
 }
 
-char* strtobin(char *input){                                                    /*funkcia transformuje string na binarny retazec*/
+void strtobin(char *output, char *input){                                                    /*funkcia transformuje string na binarny retazec*/
     int i, y, dec, bin;                                                             /*inicializacia premennych*/
     char toparse[1];
-    char *output = malloc((strlen(input) * 8)+1);/*MEMORY LEAK?*/
 
     for(i = 0; i < strlen(input) -1; i++){                                          /*cyklus prechadza string po znakoch*/
         strncpy(toparse, input + i, 1);                                         /*vyber jedneho pismena*/
@@ -115,8 +119,8 @@ char* strtobin(char *input){                                                    
         }
         
         //printf("\n");
-}
-return(output);
+   }
+   return;
 }
 
 int getdelay(char *server, char *name){                                         /*funkcia vyparsuje delay odpovede DNS servera*/
@@ -167,40 +171,35 @@ int iscached(char *server, char *name){                                         
 }
 
 int main(int argc, char** argv) {
-    //char *server = argv[1];
+    int c;
     char message[140], name[250];
     FILE *fp;
-    
-    fp = fopen("sample.msg", "r");
-    if (fp == NULL){
-        printf("cant open file\n");
-        return(0);
-    }
-    
-    while(fgets(message, sizeof(message), fp) != NULL){
-    }
-    
-    fclose(fp);
-    char *binmessage;
-    binmessage = strtobin(message);
-    
-    printf("Vlozte dns meno (len meno, ziadne tld ani www):");
-    scanf("%s", name);
-    //printf("\n%s\n", name);
-
-    int c;
     while((c = getopt(argc, argv, "sr")) != -1){
         switch (c){
             case 's':
-		sendmsg(binmessage, name);
-                break;
+   	        fp = fopen("sample.msg", "r");
+    	        if (fp == NULL){
+       		    printf("cant open file\n");
+            	    return(0);
+   	    	}	
+    
+    	  	while(fgets(message, sizeof(message), fp) != NULL){}
+     	    	fclose(fp);
+    	    
+	    	char *binmessage = (char *) malloc(sizeof(message)*8);
+    	    	strtobin(binmessage ,message);
+    
+    	    	printf("Vlozte dns meno (len meno, ziadne tld ani www):");
+    	    	scanf("%s", name);
+	    	sendmsg(binmessage, name);
+		free(binmessage);
+	    break;
             case 'r':
+		printf("Vlozte dns meno (len meno, ziadne tld ani www):");
+    	    	scanf("%s", name);
 		readmsg(name);
                 break;                      
         }
    }
-
-   //sendmsg(binmessage, "1asfdfsafcasadfadsf");
-   //readmsg("1asfdfsafcasadfadsf");
     return (EXIT_SUCCESS);
 }
