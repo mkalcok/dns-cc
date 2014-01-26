@@ -189,13 +189,13 @@ int main(int argc, char** argv) {
 	    	char *binmessage = (char *) malloc(sizeof(message)*8);
     	    	strtobin(binmessage ,message);
     
-    	    	printf("Vlozte dns meno (len meno, ziadne tld ani www):");
+    	    	printf("Vlozte kluc: ");
     	    	scanf("%s", name);
 	    	sendmsg(binmessage, name);
 		free(binmessage);
 	    break;
             case 'r':
-		printf("Vlozte dns meno (len meno, ziadne tld ani www):");
+		printf("Vlozte kluc: ");
     	    	scanf("%s", name);
 		readmsg(name);
                 break;                      
