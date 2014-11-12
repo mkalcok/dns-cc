@@ -12,6 +12,7 @@
 #include <string.h>
 #include <pthread.h>
 #include "compress.h"
+#include <errno.h>
 //#include <ares.h>
 /*
  * 
@@ -156,19 +157,19 @@ void * bulk_test(void * q){
 
 void send_data(int byte){   
     pthread_t threads[8] = {0};
-    int ret_t[8];    					/*vunkcia zapise bitovu spravu binmessage na DNS server podla kluca key*/
+    int ret_t[8];
     int indexes[8];
     int i,z;
     int j=128;
     char space[2] = " \0";
-    char cmd[25] = "dig @";             					/*samotny prikaz*/
-    char pipe[15] = " > /dev/null";						/*pipe sa prilepy nakoniec aby sme sa zbavily textoveho vystupu programu*/
+    char cmd[25] = "dig @";
+    char pipe[15] = " > /dev/null";
     char **query = malloc(8*(sizeof(char *))); 
     for(i = 0; i < 8; i++){
         query[i]= calloc(255, sizeof(char));
 
     }
-    for(i = 0; i < 8; i++){					/*binmessage sa prechadza po bitoch a kde sa narazi na hodnotu jedna tam sa spravi DNS dotaz*/
+    for(i = 0; i < 8; i++){
         strcpy(query[i], cmd);
         strcat(query[i], config->name_server);
         strcat(query[i], space);
@@ -406,6 +407,39 @@ void calibrate(){
     return;
 }
 
+void * compresor(void ** args){
+    FILE *fp = (FILE *) args[1];
+    int fd = args[0]; 
+    deflate_data(fp, fd);
+    close(fd);
+    return;
+}
+
+void test(FILE *fp){
+    /*int x;
+    int fd[2],e;
+    void *p = calloc(sizeof(char),1);
+    FILE *ofp = fopen("/tmp/deflate.msg","w");
+    pthread_t td = {0};
+    pipe(fd);
+
+    pthread_create(&td, NULL, compresor, (int *) fd[1]);
+    while (1) {
+        e = read(fd[0],p,1);
+        fwrite(p,1,1,ofp);
+        if(e == 0){break;}
+        //sleep(1);
+    }
+    close(fd[0]);
+    fclose(ofp);
+    pthread_join(td, NULL);
+    exit(0);*/
+    return;
+    
+
+}
+
+
 int main(int argc, char** argv) {
     int c, option_flags=0;
     config = init_conf();
@@ -442,7 +476,6 @@ int main(int argc, char** argv) {
                 return(EXIT_FAILURE);
         }
     }
- //   printf("%d",(int)(option_flags))
     if((option_flags & READ_FLAG) == READ_FLAG && (option_flags & SEND_FLAG) == SEND_FLAG){
         printf("You can either send or recieve, your options do not make sense\n");
         help();
@@ -451,7 +484,6 @@ int main(int argc, char** argv) {
     
     read_conf_file();
     if((option_flags & SEND_FLAG) == SEND_FLAG){
-        char *message = calloc(140, sizeof(char));
         if (strcmp(config->input_file,"-") == 0){
             printf("Type in your message (end with ^D):  ");
             fp = stdin;
@@ -466,13 +498,28 @@ int main(int argc, char** argv) {
         printf("Sending Data...\n");
         int *byte = calloc(1,sizeof(int));
         int check = 1;
-        while(check){
-            check = fread(byte, 1, 1, fp);
-            send_data(byte[0]);
+        if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
+            int fd[2];
+            pthread_t td = {0};
+            pipe(fd);
+            void * compres_args[2]= {fd[1],fp};
+
+            pthread_create(&td, NULL, compresor, (void *) compres_args );
+            pthread_join(td, NULL);
+            while(1){
+                check = read(fd[0],byte, 1);
+                if (check < 1){break;}
+                send_data(byte[0]);
+            }
+            close(fd[1]);
+        }else{
+            while(check){
+                check = fread(byte, 1, 1, fp);
+                send_data(byte[0]);
+            }
         }
 
         fclose(fp);
-        free(message);
         printf("Data sent successfuly\n");
         free(byte);
         free_conf(config);
