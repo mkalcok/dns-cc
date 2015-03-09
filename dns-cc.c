@@ -49,21 +49,34 @@ typedef struct sample{
 
 static struct sample *sample_times;
 
-int _pow(int base, int exp){                                                    /*rekurzivna funkcia na vypocet mocniny base^exp*/
+int _pow(int base, int exp){
+/*
+ *Recursive function, returns value of base^exp
+ */
     return exp == 0 ? 1 : base * _pow(base, exp - 1); 
 }
 
 float absolute_value(float a){
+/*
+ *Function returns abosulte value of input variable a
+ */
     if(a < 0){
         a = a*(-1);
     }
     return(a);
 }
 
-void compose_name(char *output, int seq){                                 /*Funkcia generuje dns meno, bude komplexnejsia zatial je to len zakladny navrh kvoli testu funkcnosti*/
-    char charseq[10];                                                           /*inicializacia uvodnych premennych*/
-    sprintf(charseq, "%d", seq);                                                /*sekvencne cislo ktore bolo ako argument funkcie sa konvertuje int -> string*/
-    
+void compose_name(char *output, int seq){
+/*Function creates  domain name to be queried.
+ *
+ *Arguments:
+ *	*output - pointer to memory where domain name will be stored
+ *	 seq	- sequence number that gets appended to domain name (see NOTE)
+ *
+ *NOTE: This is very much a dummy function for now, lacking any complexity
+ */
+    char charseq[10];
+    sprintf(charseq, "%d", seq);
     strcat(output, config->key);
     strcat(output, charseq);
     strcat(output, config->name_base);
@@ -72,27 +85,46 @@ void compose_name(char *output, int seq){                                 /*Funk
 }
 
 
-void bintostr(char *output, char *binstring){                                                /*funkcia transformuje binarny retazec do stringu*/
-    int i, y = 0, power, dec;                                                   /*inicializacia premennych*/
+void bintostr(char *output, char *binstring){
+/*Function converts string of (ASCII encoded) ones and zeroes to
+ * regular values (1Byte/character)
+ *
+ *Arguments:
+ *	*output		- pointer to memmory where final string will be stored
+ *	*binstring	- pointer to string (containing ones and zeroes)
+ *
+ * EXAMPLE:
+ * 	If *binstring contains "0100000101100010", result written to *output will be "Ab"
+ */
+    int i, y = 0, power, dec;
     char toparse[1];
     
-    for(i = 0; i < strlen(binstring); i += 8){                                  /*cyklus prechadza cely binarny retazec s krokom dlzky 8 (8bitov = 1bajt = 1char)*/
-        power = 7;                                                              /*pri kazdom kroku sa resetuje premenna power. tato sa pouziva pri ziskavani desiatkovej hodnoty z binarneho tvaru*/
-        dec = 0;                                                                /*pomocna premenna na ukladanie desiatkovej hodnoty pismena*/
-        for(y = 0; y < 8; y++ ){                                                /*cyklus prechadza 8bitov binarneho retazca*/
-            strncpy(toparse, binstring +i + y, 1);                              /*vyberie sa jeden bit*/
-            if(toparse[0] == 49){                                               /*ak je vybrany bit 1 (49 je ascii hodnota znaku '1')*/
-            dec += _pow(2, power);                                              /*k desiatkovej hodnote sa pripocita mocnina dvojky so sucasnym exponentom*/
+    for(i = 0; i < strlen(binstring); i += 8){
+        power = 7;
+        dec = 0;
+        for(y = 0; y < 8; y++ ){
+            strncpy(toparse, binstring +i + y, 1);
+            if(toparse[0] == 49){
+            dec += _pow(2, power);
             }
-            power--;                                                            /*bitovy retazec sa cita od najvyznamnejsieho miesta preto exponent zacina na 7 a v kazdom cykle sa znizuje*/
+            power--;
         }
-        toparse[0] = dec;                                                       /*konverzia int to char*/
-        strncat(output, toparse, 1);                                            /*prilepenie vysledneho znaku na koniec retazca*/
+        toparse[0] = dec;
+        strncat(output, toparse, 1);
     }
     return;
 }
 
 void retrieve_msg(int desc_out, FILE *file_out){
+/*Function retrieves data from DNS cache. Either file descriptor (desc_out)
+ *or pointer to opened file (*file_out) must be provided to which data will be
+ *written. Unused output method should be NULL, if both methods are provided,
+ *file descriptor takes precedence.
+ *
+ * Arguments:
+ *	desc_out	- file descriptor that will be used to store retrieved data
+ *	*file_out	- opened FILE pointer that will be used to store retrieved data
+ */
     int i, y= 0, endofmsg = 0, counter = 0;
     char bit[2];
     int byte = 0;
@@ -124,13 +156,27 @@ void retrieve_msg(int desc_out, FILE *file_out){
     return;
 }
 
-void * bulk_test(void * q){
-    printf("%s\n",(char *) q);
+void * send_query(void * q){
+/*Function executes DNS query itself. It is meant to be used in thread creation.
+ *
+ *Arguments:
+ *	*q	- memory that holds command to be executed. e.g.:"dig sample1.example.org @8.8.8.8"
+ *
+ * XXX: system() call should be replaced by implementation via ares.h
+ */
+    //printf("%s\n",(char *) q);
     system(q);
     return;
 }
 
-void send_data(int byte){   
+void send_data(int byte){
+/*Function writes single byte into dns cache by executing DNS queries.
+ *It utilizes pthreads to send all 8 bits of byte simultaneously
+ *XXX:We need to rework thread management
+ *
+ * Arguments
+ * 	byte - integer value of which 8 least signiticants bits are taken
+ */
     pthread_t threads[8] = {0};
     int ret_t[8];
     int indexes[8];
@@ -152,9 +198,7 @@ void send_data(int byte){
             compose_name(query[i], bitcounter_g);
 	    strcat(query[i], pipe);
             indexes[i] = i;
-            //pthread_create(&threads[i], NULL, bulk_test,&i);
-            pthread_create(&threads[i], NULL, bulk_test , query[i]);
-            //system(query);
+            pthread_create(&threads[i], NULL, send_query , query[i]);
         }
         j = j >> 1;
         ++bitcounter_g;
@@ -174,45 +218,27 @@ void send_data(int byte){
     return;
 }
 
-void strtobin(char *output, char *input){                                                    /*funkcia transformuje string na binarny retazec*/
-    int i, y, dec, bin;                                                             /*inicializacia premennych*/
-    char toparse[1];
-    for(i = 0; i < strlen(input)-1; i++){                                          /*cyklus prechadza string po znakoch*/
-        strncpy(toparse, input + i, 1);                                         /*vyber jedneho pismena*/
-        dec = toparse[0];                                                       /*char to int*/
-        //printf("%c - %d - ", toparse[0], dec);        
-        
-        for(y = 7; y >=0; y--){                                                 /*prevod desiatkoveho cisla na binarny string, jeden char na 8 bitov*/
-            bin = dec >> y;                                                     /*lsr o 'y' miest*/
-            if(bin & 1){                                                        /*ak je po shifte na poslednom mieste 1, pripise sa k stringu 1, ak nie tak 0*/
-                //printf("1");
-                strcat(output, "1");
-            }else{
-                //printf("0");
-                strcat(output, "0");
-            }
-        }
-        
-        //printf("\n");
-   }
-   return;
-}
-
 
 //TODO:Get server and name from config!
-int getdelay(char *server, char *name){                                         /*funkcia vyparsuje delay odpovede DNS servera*/
-    
-    char s[100], substring[13], check[13]=";; Query time", *time, *units;       /*inicializacia uvodnych premennych*/
+int getdelay(char *server, char *name){
+/*Function executes DNS query and parses output of dig to determine response delay
+ *NOTE: This shall be reworked once we move to querying via ares.h (see send_query())
+ *
+ *Arguments:
+ *	server	- address of DNS server
+ *	name	- domain name to be queried
+ */    
+    char s[100], substring[13], check[13]=";; Query time", *time, *units;
     char cmd[255] = "dig @";
-    int i = 0, milisec=0;                                                       /*inicializacia uvodnych premennych*/
+    int i = 0, milisec=0;
     FILE *input;                                                
     
     strcat(cmd, server);
     strcat(cmd, " ");
     strcat(cmd, name);
-    input = popen(cmd, "r");       /*do input je vlozeny vypis prikazu dig*/
+    input = popen(cmd, "r");
     
-    while(fgets(s, 100, input) != NULL){                                        /*vyparsovanie delayu a jednotiek casu*/
+    while(fgets(s, 100, input) != NULL){
         if(strncmp(strncpy(substring, s, 13), check, 13) == 0){
             strcpy(substring, s+15);
             time = strtok(substring, " ");
@@ -221,17 +247,25 @@ int getdelay(char *server, char *name){                                         
         }
     }
     
-    pclose(input);                                                              /*zatvorenie suboru input*/
-    milisec = atoi(time);                                            /*prevod vyparsovaneho stringu na integer*/
-    if(strcmp(units, "s") == 0){                                                /*prevod jednotiek v pripade ze je delay v sekundach*/
+    pclose(input);
+    milisec = atoi(time);
+    if(strcmp(units, "s") == 0){
         milisec *= 1000;
     }
     //printf("%d", milisec);
     return milisec;
 }
 
-//Modified kNN algorithm
 int iscached(char *server, char *name){
+/*This function executes DNS query and emplys Weighted k-NN algorithm
+ *(see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
+ *to determine whether domain name was previously cached or not.
+ *
+ *Arguments:
+ *	server	- address of DNS server
+ *	name	- domain name to be queried
+ */
+
     int delay = getdelay(server, name);
     float distance = 0;
     float cached_score = 0;
@@ -257,18 +291,33 @@ int iscached(char *server, char *name){
 
 
 void* set_member(void  *value, size_t size){
+/*Function returns pointer to memory with desired value stored.
+ * This pointer can be then assigned to structure member.
+ *
+ *Arguments:
+ *	*value	- data to be stored
+ *	size	- size of data &value
+ *
+ */
     void* p = calloc(size+1, sizeof(char));
     strncpy(p, value, size);
     return p;
 }
 
 conf* init_conf(){
+/*Function initialize and returns config structure
+ *
+ *XXX:Shouldnt be that path configurable? o.O
+ */
     conf* c = malloc(sizeof(conf));
     c->conf_file = set_member("/etc/dns-cc/dns.cfg", sizeof("/etc/dns-cc/dns.cfg"));
     return c;
 }
 
 void free_conf(struct conf *p){
+/*Functions frees config structure and all its members
+ *
+ */
     free(p->conf_file);
     free(p->input_file);
     free(p->output_file);
@@ -280,10 +329,19 @@ void free_conf(struct conf *p){
 }
 
 void help(){
+/*This Function will display help and usage information
+ *XXX:Replace dummy text with actual help
+ */
     printf("\nOne day, this will be nice help :)\n");
 }
 
 void remove_blank(char *str){
+/*Function removes all blank and control characters from string except final \0
+ *(Used to preparse lines from config file)
+ *
+ * Arguments:
+ *	*str	- pointer to string to be cleaned
+ */
     char *clean_str = calloc(strlen(str), sizeof(char));
     char *buf = malloc(1);
     int i = 0;
@@ -302,6 +360,12 @@ void remove_blank(char *str){
 }
 
 void set_conf(char* var, char* value){
+/*Function sets config structure members (if var coresponds to struct member)
+ *
+ *Arguments
+ *	var		- struct member to be set
+ *	value	- data for struct member
+ */
     int value_length = (int)strlen(value);
     if(strcasecmp(var, "server") == 0){
         config->name_server = set_member(value, value_length);
@@ -325,6 +389,9 @@ void set_conf(char* var, char* value){
 }
 
 void read_conf_file(){
+/*Function parses config file and sets config structure members
+ *
+ */
     FILE *fp;
     fp = fopen(config->conf_file, "r");
     size_t line_length = 200;
@@ -355,12 +422,19 @@ void read_conf_file(){
 }
 
 sample* init_sample_times(){
+/*Function creates struct and alocates space (based on config->precision)
+ * for sample time values used by iscached() to determine whether domain
+ * name was cached or not
+ */
     sample *s = malloc(sizeof(sample));
     s->cached_set = calloc(config->precision, sizeof(int));
     s->uncached_set = calloc(config->precision, sizeof(int));
 }
 
 void free_sample_times(){
+/*Function frees structure holding sample times and its members
+ *
+ */
     free(sample_times->cached_set);
     free(sample_times->uncached_set);
     free(sample_times);
@@ -368,6 +442,10 @@ void free_sample_times(){
 
 
 void calibrate(){
+/*Function colects sample times for cached and not cached domain names.
+ *Number of samples is based on config->precision defined by user
+ *
+ */
     sample_times = init_sample_times();
     int i = 0;
     char *name = calloc(255, sizeof(char));
@@ -382,6 +460,13 @@ void calibrate(){
 }
 
 void * compresor(void ** args){
+/*Function calls deflate_data() from compres.h with appropriate arguments.
+ *It is meant to be us in thread creation
+ *
+ * Arguments:
+ *	arg[0]	- FILE pointer to opened input file
+ *	arg[1]	- File descriptor to write end of pipe
+ */
     FILE *fp = (FILE *) args[1];
     int fd = (int)args[0]; 
     deflate_data(fp, fd);
@@ -390,36 +475,18 @@ void * compresor(void ** args){
 }
 
 void * decompresor(void ** args){
+/*Function calls inflate_data() from compres.h with appropriate arguments.
+ *It is meant to be us in thread creation
+ *
+ * Arguments:
+ *	arg[0]	- FILE pointer to opened output file
+ *	arg[1]	- File descriptor to read end of pipe
+ */
     FILE *fp = (FILE *) args[0];
     int fd = (int)args[1]; 
     inflate_data(fd, fp);
     return;
 }
-
-void test(FILE *fp){
-    /*int x;
-    int fd[2],e;
-    void *p = calloc(sizeof(char),1);
-    FILE *ofp = fopen("/tmp/deflate.msg","w");
-    pthread_t td = {0};
-    pipe(fd);
-
-    pthread_create(&td, NULL, compresor, (int *) fd[1]);
-    while (1) {
-        e = read(fd[0],p,1);
-        fwrite(p,1,1,ofp);
-        if(e == 0){break;}
-        //sleep(1);
-    }
-    close(fd[0]);
-    fclose(ofp);
-    pthread_join(td, NULL);
-    exit(0);*/
-    return;
-    
-
-}
-
 
 int main(int argc, char** argv) {
     int c, option_flags=0;
@@ -437,18 +504,18 @@ int main(int argc, char** argv) {
                 break;
 			case 'D':
             case 'C':
-                //Are we gonna compress?
+                //Are we gonna (de)compress?
                 option_flags += COMPRESS_FLAG;
                 break;
     
             case 's':
                 //program is to send data. If source file is -, open stdin
-                //XXX:Je takyto STDIN standard?
                 config->input_file = set_member(optarg, strlen(optarg));
                 option_flags += SEND_FLAG;
 	        break;
 
             case 'r':
+				//program is to recieve data from DNS server and write them into file.
                 config->output_file = set_member(optarg, strlen(optarg));
                 option_flags += READ_FLAG;
                 break;
@@ -458,7 +525,7 @@ int main(int argc, char** argv) {
         }
     }
     if((option_flags & READ_FLAG) == READ_FLAG && (option_flags & SEND_FLAG) == SEND_FLAG){
-        printf("You can either send or recieve, your options do not make sense\n");
+        printf("You can't (-s)end and (-r)ecieve at same time, your options do not make sense\n");
         help();
         return(EXIT_FAILURE);
     }
@@ -532,10 +599,10 @@ int main(int argc, char** argv) {
         return(EXIT_SUCCESS);
     } 
     help();
-    printf("input_file %s\n", config->input_file);
+    /*printf("input_file %s\n", config->input_file);
     printf("name_server %s\n", config->name_server);
     printf("name_base %s\n", config->name_base);
-    printf("key %s\n", config->key);
+    printf("key %s\n", config->key);*/
     free_conf(config);
     return (EXIT_SUCCESS);
 }
