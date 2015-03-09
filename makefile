@@ -1,4 +1,4 @@
-CC=gcc
+CC=gcc -w
 PREFIX=/usr/bin
 SETTINGS_DIR=/etc/dns-cc
 

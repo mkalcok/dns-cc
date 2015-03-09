@@ -92,15 +92,14 @@ void bintostr(char *output, char *binstring){                                   
     return;
 }
 
-void retrieve_msg(){
-    int i, y= 0, endofmsg = 0;
+void retrieve_msg(int desc_out, FILE *file_out){
+    int i, y= 0, endofmsg = 0, counter = 0;
     char bit[2];
-    FILE *fp = fopen(config->output_file,"wb");
     int byte = 0;
     char *name = calloc(255, sizeof(char));
     while (endofmsg != 1){
         byte = 0;
-	endofmsg = 1;
+		endofmsg = 1;
         for(i = y; i < y+8; i++){
             byte = byte << 1;
             strcpy(name, "");
@@ -110,48 +109,24 @@ void retrieve_msg(){
                 endofmsg =0;
             }
         }
-        fwrite(&byte, 1, 1, fp);
+		counter++;
+		printf("Bytes recieved: %d\r",counter);
+		fflush(stdout);
+		if (desc_out == NULL){
+        	fwrite(&byte, 1, 1, file_out);
+		}else{
+        	write(desc_out, &byte, 1);
+		}
         y += 8;
     }
+	printf("\n");
     free(name);
-    fclose(fp);
     return;
-}
-
-
-
-void retrieve_msg2(){	        						/*Funkcia  cita spravu z dns mien odvodenych z char *key */
-    int i, y= 0, endofmsg = 0;							/*inicializacia uvodnych premennych*/
-    char bit[2];
-    char *binmessage = calloc(16000, sizeof(char));
-    char *name = calloc(255, sizeof(char));
-    char *message = calloc(200, sizeof(char));
-    while (endofmsg != 1){							/*While cyklus prechadza jednotlive bajty spravy zatial co vnoreny for cyklus prechadza tieto bajty po bitoch, opakuje sa az kym for cyklus nenajde bajt plny nulovych bitov (sprava skoncila)*/
-	endofmsg = 1;								/*na zaciatku kazdeho cyklu predpokladame ze tento bajt je posledny*/
-        for(i = y; i < y+8; i++){    						/*for cyklus prejde 8 bitov ktore zapise do vystupneho binarneho retazca binstring, ak narazi na '1' zapise do premennej endofmsg hodnotu 0 cim indikuje ze nejde o posledny bajt*/
-            strcpy(name, "");                                                   /*vynulovanie retazca pri kazdej iteracii cyklu*/
-            compose_name(name ,i);                                               /*z kluca a cisla iteracie vygenerujeme plne dns meno funkciou compose_name()*/
-            sprintf(bit, "%d", iscached(config->name_server, name));		/*DNS zaznam sa otestuje ci je zacacheovany a vysledok sa pretypuje int -> string*/
-            //printf("%c",bit[0]);
-            strcat(binmessage, bit);						/*vysledok sa prilepy na koniec retazca binmessage*/
-	    if(bit[0] == '1'){							/*ak je vysledok '1', indikuje to ze nejde o posledny bajt a podla toho sa nastavi aj premenna endofmsg */
-	    endofmsg =0;
-	    }
-        }
-    //printf(" ");
-    y += 8; 									/*pocitadlo sa posunien a zaciatok dalsieho bajtu*/
-    }
-    bintostr(message, binmessage);						/*sprava sa posle funkcii bintostr() aby sa prelozil bitovy retazec na text a vypise sa*/
-    printf("%s \n",message);
-    free(binmessage);
-    free(name);
-    free(message);
-    return;										/*uvolni sa alokovana pamat*/
 }
 
 void * bulk_test(void * q){
     printf("%s\n",(char *) q);
-    //system(q);
+    system(q);
     return;
 }
 
@@ -247,8 +222,7 @@ int getdelay(char *server, char *name){                                         
     }
     
     pclose(input);                                                              /*zatvorenie suboru input*/
-    
-    milisec = strtol(time, NULL, 0);                                            /*prevod vyparsovaneho stringu na integer*/
+    milisec = atoi(time);                                            /*prevod vyparsovaneho stringu na integer*/
     if(strcmp(units, "s") == 0){                                                /*prevod jednotiek v pripade ze je delay v sekundach*/
         milisec *= 1000;
     }
@@ -409,9 +383,16 @@ void calibrate(){
 
 void * compresor(void ** args){
     FILE *fp = (FILE *) args[1];
-    int fd = args[0]; 
+    int fd = (int)args[0]; 
     deflate_data(fp, fd);
     close(fd);
+    return;
+}
+
+void * decompresor(void ** args){
+    FILE *fp = (FILE *) args[0];
+    int fd = (int)args[1]; 
+    inflate_data(fd, fp);
     return;
 }
 
@@ -447,14 +428,14 @@ int main(int argc, char** argv) {
     char ch[1];
     FILE *fp;
     char cfg_file[100];
-    while((c = getopt(argc, argv, "Cc:s:r:")) != -1){
+    while((c = getopt(argc, argv, "DCc:s:r:")) != -1){
         switch (c){
             case 'c':
                 //Redefine config file
                 free(config->conf_file);
                 config->conf_file = set_member(optarg, strlen(optarg));
                 break;
-
+			case 'D':
             case 'C':
                 //Are we gonna compress?
                 option_flags += COMPRESS_FLAG;
@@ -526,18 +507,35 @@ int main(int argc, char** argv) {
         return(EXIT_SUCCESS);
     }
     if((option_flags & READ_FLAG) == READ_FLAG){
+    	FILE *fp = fopen(config->output_file,"wb");
         printf("Retrieving data...\n");
         calibrate();
-        retrieve_msg();
+
+        if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
+            int fd[2];
+			int check = 1;
+            pthread_t td = {0};
+            pipe(fd);
+            void * decompres_args[2]= {fp,fd[0]};
+            pthread_create(&td, NULL, decompresor, (void *) decompres_args );
+			retrieve_msg(fd[1], NULL);
+			close(fd[1]);
+            pthread_join(td, NULL);
+            close(fd[0]);
+		}else{
+        	retrieve_msg(NULL, fp);
+		}
+		printf("Done Reading\n");
+		fclose(fp);
         free_sample_times();
         free_conf(config);
         return(EXIT_SUCCESS);
     } 
     help();
+    printf("input_file %s\n", config->input_file);
+    printf("name_server %s\n", config->name_server);
+    printf("name_base %s\n", config->name_base);
+    printf("key %s\n", config->key);
     free_conf(config);
-    /*printf("input_file %s", config->input_file);
-    printf("name_server %s", config->name_server);
-    printf("name_base %s", config->name_base);
-    printf("key %s", config->key);*/
     return (EXIT_SUCCESS);
 }
