@@ -5,6 +5,11 @@
 
 unsigned long TIMER[2] = {0,0};
 
+typedef struct query_t{
+	char *domain_name;
+	char *name_server;
+}query_t;
+
 void gethostbyname_cb (void* arg, int status, int timeouts, struct hostent* host)
 {
     if(status == ARES_SUCCESS){
@@ -37,14 +42,14 @@ void main_loop(ares_channel channel){
      }
 }
 
-int exec_query(char* server_str, char *name){
+int exec_query(query_t *query){
     struct ares_options options;
 	struct timespec tv;
     int res = 500, delay;
 	struct in_addr server_addr;
 	//char *name = malloc(strlen(argv[1]));
 	//strcpy(name, argv[1]);
-    inet_aton(server_str, &server_addr);
+    inet_aton(query->name_server, &server_addr);
 	options.servers = &server_addr;
 	options.nservers = 1;
     ares_channel channel;
@@ -54,7 +59,7 @@ int exec_query(char* server_str, char *name){
     }
     //ares_gethostbyname(channel, name, AF_INET, dns_callback, NULL);
     main_loop(channel);
-    ares_query(channel, name, 1 ,1, query_cb, NULL);
+    ares_query(channel, query->domain_name, 1 ,1, query_cb, NULL);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
 	TIMER[0] = (tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec);
     main_loop(channel);

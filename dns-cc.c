@@ -47,6 +47,7 @@ typedef struct sample{
     int *uncached_set;
     } sample;
 
+
 static struct sample *sample_times;
 
 int _pow(int base, int exp){
@@ -156,7 +157,8 @@ void retrieve_msg(int desc_out, FILE *file_out){
     return;
 }
 
-void * send_query(void * arg){
+void * send_query(query_t * arg){
+//DEPRECATED//
 /*Function executes DNS query itself. It is meant to be used in thread creation.
  *
  *Arguments:
@@ -164,8 +166,8 @@ void * send_query(void * arg){
  *
  * XXX: system() call should be replaced by implementation via ares.h
  */
-    printf("name: %s\n",arg);
-    exec_query(config->name_server, arg);
+    printf("name: %s\n",arg->domain_name);
+    //exec_query(config->name_server, arg);
     return;
 }
 
@@ -182,39 +184,30 @@ void send_data(int byte){
     int indexes[8];
     int i,z;
     int j=128;
-    char space[2] = " \0";
-    char cmd[25] = "dig @";
-    char pipe[15] = " > /dev/null";
-    char **query = malloc(8*(sizeof(char *))); 
+    query_t **query_list = malloc(8*(sizeof(query_t *))); 
     for(i = 0; i < 8; i++){
-        query[i]= calloc(255, sizeof(char));
+        query_list[i]= calloc(1, sizeof(query_t));
+		query_list[i]->domain_name = calloc(255,sizeof(char));
+		query_list[i]->name_server = config->name_server;
 
     }
     for(i = 0; i < 8; i++){
-        //strcpy(query[i], cmd);
-        //strcat(query[i], config->name_server);
-        //strcat(query[i], space);
         if(byte & j){
-            compose_name(query[i], bitcounter_g);
-	    //strcat(query[i], pipe);
+            compose_name(query_list[i]->domain_name, bitcounter_g);
             indexes[i] = i;
-			//char *options[2] = {config->name_server, query[i]};
-            pthread_create(&threads[i], NULL, send_query ,(void *) query[i]);
+            pthread_create(&threads[i], NULL, exec_query ,(query_t *) query_list[i]);
         }
         j = j >> 1;
         ++bitcounter_g;
     }
-    //printf("\r%ld bytes sent",(bitcounter_g/8));
-    //fflush(stdout);
-    
     for(z=0;z < 8; z++){
         pthread_join(threads[z], NULL);
     }
 
     for(i = 0; i < 8; i++){
-        free(query[i]);
+        free(query_list[i]);
     }
-    free(query);
+    free(query_list);
     
     return;
 }
@@ -230,7 +223,8 @@ int iscached(char *server, char *name){
  *	name	- domain name to be queried
  */
 
-    int delay = exec_query(server, name);
+	query_t query = {.domain_name = name, .name_server = server};
+    int delay = exec_query(&query);
     float distance = 0;
     float cached_score = 0;
     float uncached_score = 0;
@@ -412,14 +406,16 @@ void calibrate(){
  */
     sample_times = init_sample_times();
     int i = 0;
-    char *name = calloc(255, sizeof(char));
+	query_t query;
+	query.domain_name = calloc(255, sizeof(char));
+	query.name_server = config->name_server;
     for(i; i < config->precision; i++){
-        strcpy(name, "precise.\0");
-        compose_name(name, i);
-        sample_times->uncached_set[i] = exec_query(config->name_server, name);
-        sample_times->cached_set[i] = exec_query(config->name_server, name);
+        strcpy(query.domain_name, "precise.\0");
+        compose_name(query.domain_name, i);
+        sample_times->uncached_set[i] = exec_query(&query);
+        sample_times->cached_set[i] = exec_query(&query);
     }
-    free(name);
+    free(query.domain_name);
     return;
 }
 
