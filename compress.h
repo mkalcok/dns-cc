@@ -42,7 +42,7 @@ int deflate_data(FILE *source, int fd_dest){
             have = CHUNK - strm.avail_out;
             int e;
             e = write(fd_dest, out, have);
-            printf("%d\n,%s\n",e, strerror(errno));
+            //printf("%d\n,%s\n",e, strerror(errno));
             /*if ((e = write(&fd, out, have)) != 1) {
                 printf("error\n%d\n",e);
                 (void)deflateEnd(&strm);

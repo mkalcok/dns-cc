@@ -13,7 +13,7 @@
 #include <pthread.h>
 #include "compress.h"
 #include <errno.h>
-//#include <ares.h>
+#include "nameres.h"
 /*
  * 
  */
@@ -156,7 +156,7 @@ void retrieve_msg(int desc_out, FILE *file_out){
     return;
 }
 
-void * send_query(void * q){
+void * send_query(void * arg){
 /*Function executes DNS query itself. It is meant to be used in thread creation.
  *
  *Arguments:
@@ -164,8 +164,8 @@ void * send_query(void * q){
  *
  * XXX: system() call should be replaced by implementation via ares.h
  */
-    //printf("%s\n",(char *) q);
-    system(q);
+    printf("name: %s\n",arg);
+    exec_query(config->name_server, arg);
     return;
 }
 
@@ -191,14 +191,15 @@ void send_data(int byte){
 
     }
     for(i = 0; i < 8; i++){
-        strcpy(query[i], cmd);
-        strcat(query[i], config->name_server);
-        strcat(query[i], space);
+        //strcpy(query[i], cmd);
+        //strcat(query[i], config->name_server);
+        //strcat(query[i], space);
         if(byte & j){
             compose_name(query[i], bitcounter_g);
-	    strcat(query[i], pipe);
+	    //strcat(query[i], pipe);
             indexes[i] = i;
-            pthread_create(&threads[i], NULL, send_query , query[i]);
+			//char *options[2] = {config->name_server, query[i]};
+            pthread_create(&threads[i], NULL, send_query ,(void *) query[i]);
         }
         j = j >> 1;
         ++bitcounter_g;
@@ -219,43 +220,6 @@ void send_data(int byte){
 }
 
 
-//TODO:Get server and name from config!
-int getdelay(char *server, char *name){
-/*Function executes DNS query and parses output of dig to determine response delay
- *NOTE: This shall be reworked once we move to querying via ares.h (see send_query())
- *
- *Arguments:
- *	server	- address of DNS server
- *	name	- domain name to be queried
- */    
-    char s[100], substring[13], check[13]=";; Query time", *time, *units;
-    char cmd[255] = "dig @";
-    int i = 0, milisec=0;
-    FILE *input;                                                
-    
-    strcat(cmd, server);
-    strcat(cmd, " ");
-    strcat(cmd, name);
-    input = popen(cmd, "r");
-    
-    while(fgets(s, 100, input) != NULL){
-        if(strncmp(strncpy(substring, s, 13), check, 13) == 0){
-            strcpy(substring, s+15);
-            time = strtok(substring, " ");
-            units = strtok(NULL, " ");
-            break;
-        }
-    }
-    
-    pclose(input);
-    milisec = atoi(time);
-    if(strcmp(units, "s") == 0){
-        milisec *= 1000;
-    }
-    //printf("%d", milisec);
-    return milisec;
-}
-
 int iscached(char *server, char *name){
 /*This function executes DNS query and emplys Weighted k-NN algorithm
  *(see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
@@ -266,7 +230,7 @@ int iscached(char *server, char *name){
  *	name	- domain name to be queried
  */
 
-    int delay = getdelay(server, name);
+    int delay = exec_query(server, name);
     float distance = 0;
     float cached_score = 0;
     float uncached_score = 0;
@@ -452,8 +416,8 @@ void calibrate(){
     for(i; i < config->precision; i++){
         strcpy(name, "precise.\0");
         compose_name(name, i);
-        sample_times->uncached_set[i] = getdelay(config->name_server, name);
-        sample_times->cached_set[i] = getdelay(config->name_server, name);
+        sample_times->uncached_set[i] = exec_query(config->name_server, name);
+        sample_times->cached_set[i] = exec_query(config->name_server, name);
     }
     free(name);
     return;
