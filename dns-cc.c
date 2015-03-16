@@ -30,12 +30,17 @@ typedef unsigned short    uint16_t;
 static long bitcounter_g = 0;
 
 //Config declarations
+typedef struct server_list{
+	char *server;
+	struct server_list *next;
+}server_list;
+
 typedef struct conf{
     char *conf_file;
     char *input_file;
     char *output_file;
     char *name_base;
-    char *name_server;
+    server_list *name_server;
     char *key;
     int precision;
     } conf;
@@ -130,6 +135,7 @@ void retrieve_msg(int desc_out, FILE *file_out){
     char bit[2];
     int byte = 0;
     char *name = calloc(255, sizeof(char));
+	struct server_list *servers = config->name_server;
     while (endofmsg != 1){
         byte = 0;
 		endofmsg = 1;
@@ -137,10 +143,11 @@ void retrieve_msg(int desc_out, FILE *file_out){
             byte = byte << 1;
             strcpy(name, "");
             compose_name(name ,i);
-            if (iscached(config->name_server, name)){
+            if (iscached(servers->server, name)){
                 byte |= 1;
                 endofmsg =0;
             }
+			servers = servers->next;
         }
 		counter++;
 		printf("Bytes recieved: %d\r",counter);
@@ -157,21 +164,7 @@ void retrieve_msg(int desc_out, FILE *file_out){
     return;
 }
 
-void * send_query(query_t * arg){
-//DEPRECATED//
-/*Function executes DNS query itself. It is meant to be used in thread creation.
- *
- *Arguments:
- *	*q	- memory that holds command to be executed. e.g.:"dig sample1.example.org @8.8.8.8"
- *
- * XXX: system() call should be replaced by implementation via ares.h
- */
-    printf("name: %s\n",arg->domain_name);
-    //exec_query(config->name_server, arg);
-    return;
-}
-
-void send_data(int byte){
+void send_data(int fd){
 /*Function writes single byte into dns cache by executing DNS queries.
  *It utilizes pthreads to send all 8 bits of byte simultaneously
  *XXX:We need to rework thread management
@@ -179,36 +172,35 @@ void send_data(int byte){
  * Arguments
  * 	byte - integer value of which 8 least signiticants bits are taken
  */
-    pthread_t threads[8] = {0};
-    int ret_t[8];
-    int indexes[8];
-    int i,z;
-    int j=128;
-    query_t **query_list = malloc(8*(sizeof(query_t *))); 
-    for(i = 0; i < 8; i++){
-        query_list[i]= calloc(1, sizeof(query_t));
-		query_list[i]->domain_name = calloc(255,sizeof(char));
-		query_list[i]->name_server = config->name_server;
 
-    }
-    for(i = 0; i < 8; i++){
-        if(byte & j){
-            compose_name(query_list[i]->domain_name, bitcounter_g);
-            indexes[i] = i;
-            pthread_create(&threads[i], NULL, exec_query ,(query_t *) query_list[i]);
-        }
-        j = j >> 1;
-        ++bitcounter_g;
-    }
-    for(z=0;z < 8; z++){
-        pthread_join(threads[z], NULL);
-    }
+	struct server_list *servers = config->name_server;
+	char byte = 0;
+	short check;
+	query_t *query = calloc(1,sizeof(query_t));
+	query->domain_name = calloc(255,sizeof(char));
 
-    for(i = 0; i < 8; i++){
-        free(query_list[i]);
-    }
-    free(query_list);
-    
+	while(1){
+		check = read(fd, &byte, 1);
+		if (check < 1){break;}
+		//pthread_t threads[8] = {0};
+		int ret_t[8];
+		int indexes[8];
+		int i,z;
+		int j=128;
+		for(i = 0; i < 8; i++){
+			if(byte & j){
+				compose_name(query->domain_name, bitcounter_g);
+				query->name_server = servers->server;
+				exec_query(query);
+				strncpy(query->domain_name,"\0",1);
+			}
+			j = j >> 1;
+			++bitcounter_g;
+			servers = servers->next;
+		}
+	}
+    free(query->domain_name);
+    free(query);
     return;
 }
 
@@ -272,6 +264,18 @@ conf* init_conf(){
     return c;
 }
 
+void free_servers(struct server_list *root){
+	struct server_list *n = root->next;
+	while(1){
+		free(n->server);
+		if(n->next == root){break;}
+		n = n->next;
+	}
+	free(root->server);
+	free(root);
+
+}
+
 void free_conf(struct conf *p){
 /*Functions frees config structure and all its members
  *
@@ -280,7 +284,7 @@ void free_conf(struct conf *p){
     free(p->input_file);
     free(p->output_file);
     free(p->name_base);
-    free(p->name_server);
+    free_servers(p->name_server);
     free(p->key);
     free(p);
     return;
@@ -317,6 +321,39 @@ void remove_blank(char *str){
     return;
 }
 
+void test(){
+	struct server_list *a = config->name_server;
+	struct server_list *n,*p;
+	n = a;
+	while(1){
+		printf("%s\n",n->server);
+		n = n->next;
+		sleep(1);
+	}
+}
+
+void set_servers(char *servers){
+	char *token = calloc(1,strlen(servers));
+	struct server_list *prev, *new, *first;
+
+	token = strsep(&servers,",");
+	first = calloc(1,sizeof(struct server_list));
+	first->server = calloc(1,strlen(token));
+	strncpy(first->server, token, strlen(token));
+	first->next = first;
+	config->name_server = first;
+	prev =  first;
+
+	while(token = strsep(&servers,",")){
+		new = calloc(1, sizeof(server_list));
+		new->server = calloc(1, strlen(token));
+		strncpy(new->server, token, strlen(token));
+		new->next = first;
+		prev->next = new;
+		prev = new;
+	}
+}
+
 void set_conf(char* var, char* value){
 /*Function sets config structure members (if var coresponds to struct member)
  *
@@ -326,7 +363,7 @@ void set_conf(char* var, char* value){
  */
     int value_length = (int)strlen(value);
     if(strcasecmp(var, "server") == 0){
-        config->name_server = set_member(value, value_length);
+        set_servers(value);
         return;
     }
     if(strcasecmp(var, "base_name") == 0){
@@ -406,15 +443,17 @@ void calibrate(){
  */
     sample_times = init_sample_times();
     int i = 0;
-	query_t query;
-	query.domain_name = calloc(255, sizeof(char));
-	query.name_server = config->name_server;
+    query_t query;
+    query.domain_name = calloc(255, sizeof(char));
+    struct server_list *servers = config->name_server;
     for(i; i < config->precision; i++){
+        query.name_server = servers->server;
         strcpy(query.domain_name, "precise.\0");
-        compose_name(query.domain_name, i);
+        compose_name(query.domain_name, i); 
         sample_times->uncached_set[i] = exec_query(&query);
         sample_times->cached_set[i] = exec_query(&query);
-    }
+        servers = servers->next;
+    }   
     free(query.domain_name);
     return;
 }
@@ -430,7 +469,7 @@ void * compresor(void ** args){
     FILE *fp = (FILE *) args[1];
     int fd = (int)args[0]; 
     deflate_data(fp, fd);
-    close(fd);
+	close(fd);
     return;
 }
 
@@ -445,6 +484,33 @@ void * decompresor(void ** args){
     FILE *fp = (FILE *) args[0];
     int fd = (int)args[1]; 
     inflate_data(fd, fp);
+    return;
+}
+
+void * file_to_fd(void ** args){
+    FILE *fp = (FILE *) args[1];
+    int fd = (int)args[0]; 
+	int check = 0;
+	char buffer[1];
+    while(1){
+		check = fread(&buffer,sizeof(char),1,fp);
+		if(check <= 0){break;}
+		write(fd, &buffer, 1);
+	}
+	close(fd);
+    return;
+}
+
+void * fd_to_file(void ** args){
+    FILE *fp = (FILE *) args[0];
+    int fd = (int)args[1]; 
+	int check = 0;
+	char buffer[1];
+    while(1){
+		check = read(fd, &buffer, 1);
+		if(check <= 0){break;}
+		fwrite(&buffer,sizeof(char),1,fp);
+	}
     return;
 }
 
@@ -506,26 +572,23 @@ int main(int argc, char** argv) {
         printf("Sending Data...\n");
         int *byte = calloc(1,sizeof(int));
         int check = 1;
+        int fd[2];
+        pipe(fd);
+        pthread_t td = {0};
         if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
-            int fd[2];
-            pthread_t td = {0};
-            pipe(fd);
             void * compres_args[2]= {fd[1],fp};
-
             pthread_create(&td, NULL, compresor, (void *) compres_args );
+			send_data(fd[0]);
             pthread_join(td, NULL);
-            while(1){
-                check = read(fd[0],byte, 1);
-                if (check < 1){break;}
-                send_data(byte[0]);
-            }
-            close(fd[1]);
         }else{
-            while(check){
-                check = fread(byte, 1, 1, fp);
-                send_data(byte[0]);
-            }
+			void *args[2] = {fd[1],fp};
+            pthread_create(&td, NULL, file_to_fd, (void *) args );
+			send_data(fd[0]);
+        	pthread_join(td, NULL);    
         }
+        close(fd[1]);
+		close(fd[0]);
+
 
         fclose(fp);
         printf("Data sent successfuly\n");
@@ -538,20 +601,23 @@ int main(int argc, char** argv) {
         printf("Retrieving data...\n");
         calibrate();
 
+        int fd[2];
+        pipe(fd);
+        pthread_t td = {0};
         if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
-            int fd[2];
-			int check = 1;
-            pthread_t td = {0};
-            pipe(fd);
             void * decompres_args[2]= {fp,fd[0]};
             pthread_create(&td, NULL, decompresor, (void *) decompres_args );
 			retrieve_msg(fd[1], NULL);
 			close(fd[1]);
             pthread_join(td, NULL);
-            close(fd[0]);
 		}else{
-        	retrieve_msg(NULL, fp);
+			void * args[2] = {fp, fd[0]};
+            pthread_create(&td, NULL, fd_to_file, (void *) args );
+        	retrieve_msg(fd[1],NULL);
+			close(fd[1]);
+            pthread_join(td, NULL);
 		}
+		close(fd[0]);
 		printf("Done Reading\n");
 		fclose(fp);
         free_sample_times();
