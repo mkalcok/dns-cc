@@ -272,6 +272,7 @@ void free_servers(struct server_list *root){
 		n = n->next;
 	}
 	free(root->server);
+	free(root->next);
 	free(root);
 
 }
@@ -333,7 +334,7 @@ void test(){
 }
 
 void set_servers(char *servers){
-	char *token = calloc(1,strlen(servers));
+	char *token;
 	struct server_list *prev, *new, *first;
 
 	token = strsep(&servers,",");
@@ -345,6 +346,7 @@ void set_servers(char *servers){
 	prev =  first;
 
 	while(token = strsep(&servers,",")){
+		//#XXX:Valgrind says I'm loosing memory here
 		new = calloc(1, sizeof(server_list));
 		new->server = calloc(1, strlen(token));
 		strncpy(new->server, token, strlen(token));
@@ -538,6 +540,7 @@ int main(int argc, char** argv) {
                 //program is to send data. If source file is -, open stdin
                 config->input_file = set_member(optarg, strlen(optarg));
                 option_flags += SEND_FLAG;
+                config->output_file = set_member("\0", strlen("\0"));
 	        break;
 
             case 'r':
@@ -579,13 +582,12 @@ int main(int argc, char** argv) {
             void * compres_args[2]= {fd[1],fp};
             pthread_create(&td, NULL, compresor, (void *) compres_args );
 			send_data(fd[0]);
-            pthread_join(td, NULL);
         }else{
 			void *args[2] = {fd[1],fp};
             pthread_create(&td, NULL, file_to_fd, (void *) args );
 			send_data(fd[0]);
-        	pthread_join(td, NULL);    
         }
+		pthread_join(td, NULL);
         close(fd[1]);
 		close(fd[0]);
 

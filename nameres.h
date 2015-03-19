@@ -46,11 +46,11 @@ int exec_query(query_t *query){
     struct ares_options options;
 	struct timespec tv;
     int res = 500, delay;
-	struct in_addr server_addr;
+	struct in_addr *server_addr = malloc(sizeof(struct in_addr));
 	//char *name = malloc(strlen(argv[1]));
 	//strcpy(name, argv[1]);
-    inet_aton(query->name_server, &server_addr);
-	options.servers = &server_addr;
+    inet_aton(query->name_server, server_addr);
+	options.servers = server_addr;
 	options.nservers = 1;
     ares_channel channel;
     if((res = ares_init_options(&channel, &options, ARES_OPT_SERVERS)) != ARES_SUCCESS) {
@@ -58,12 +58,14 @@ int exec_query(query_t *query){
         return 1;
     }
     //ares_gethostbyname(channel, name, AF_INET, dns_callback, NULL);
-    main_loop(channel);
+    //main_loop(channel);
     ares_query(channel, query->domain_name, 1 ,1, query_cb, NULL);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
 	TIMER[0] = (tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec);
     main_loop(channel);
 	delay = TIMER[1] - TIMER[0];
 	//printf("%lu\n",delay);
+	ares_destroy(channel);
+	free(server_addr);
     return delay;
   }
