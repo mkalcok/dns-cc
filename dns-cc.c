@@ -14,6 +14,7 @@
 #include "compress.h"
 #include <errno.h>
 #include "nameres.h"
+#include <fcntl.h>
 /*
  * 
  */
@@ -27,7 +28,7 @@
 typedef unsigned char     uint8_t;
 typedef unsigned short    uint16_t;
 
-static long bitcounter_g = 0;
+static long BITCOUNTER = 0;
 
 //Config declarations
 typedef struct server_list{
@@ -43,6 +44,7 @@ typedef struct conf{
     server_list *name_server;
     char *key;
     int precision;
+	int max_speed;
     } conf;
 
 static struct conf *config;
@@ -54,6 +56,10 @@ typedef struct sample{
 
 
 static struct sample *sample_times;
+
+int END_THREADS = 0;
+pthread_mutex_t LOCK;
+struct server_list *CURRENT_SERVER;
 
 int _pow(int base, int exp){
 /*
@@ -121,6 +127,78 @@ void bintostr(char *output, char *binstring){
     return;
 }
 
+void sender_thread(int fd){
+	const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
+	struct timespec rem;
+	char c;
+	ssize_t check;
+	query_t query;
+	query.domain_name = malloc(255);
+	while(1){
+		if(END_THREADS){
+			printf("Caught exit\n");
+			return;
+		}
+
+		if(pthread_mutex_trylock(&LOCK) == 0){
+			check = read(fd, &c, 1);
+			if(check > 0){
+				if(strncmp(&c,"1",1) == 0){
+					compose_name(query.domain_name, BITCOUNTER);
+					query.name_server = CURRENT_SERVER->server;
+					BITCOUNTER++;
+					CURRENT_SERVER = CURRENT_SERVER->next;
+					pthread_mutex_unlock(&LOCK);
+					exec_query(&query);
+					strncpy(query.domain_name, "\0", 1);
+				}else{
+					BITCOUNTER++;
+					CURRENT_SERVER = CURRENT_SERVER->next;
+					pthread_mutex_unlock(&LOCK);
+				}
+			}else if(check == -1 && errno == EAGAIN){
+				pthread_mutex_unlock(&LOCK);
+			}else{
+				END_THREADS=1;
+				pthread_mutex_unlock(&LOCK);
+			}
+		}
+		nanosleep(&sleep_time, &rem);
+	}
+}
+
+
+void join_threads(pthread_t *threads){
+	int i, check;
+	for(i = 0; i < 10; i++){
+		//printf("WAITING FOR thread %u\n",threads[i]);
+		check = pthread_join(threads[i], NULL);
+		//printf("JOINED thread %u with status %d\n",threads[i], check);
+	}
+
+}
+
+pthread_t * create_threads(int fd){
+	const int count = 128;
+	int s_count;
+	int i;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+	//pthread_t threads[10] = {0};
+	pthread_t * threads = malloc(sizeof(pthread_t)*10);
+	
+	int arg = fd;
+
+	for(i = 0; i < 10; i++){
+		pthread_create(&threads[i], &attr, sender_thread, fd);
+		//printf("Original thread %u\n",threads[i]);
+
+	}
+	
+	return(threads);
+}
+
 void retrieve_msg(int desc_out, FILE *file_out){
 /*Function retrieves data from DNS cache. Either file descriptor (desc_out)
  *or pointer to opened file (*file_out) must be provided to which data will be
@@ -164,10 +242,38 @@ void retrieve_msg(int desc_out, FILE *file_out){
     return;
 }
 
+void stream_to_bits(void ** args){
+	int input_pipe = (int)args[0];
+	int output_pipe = (int)args[1];
+	int check = 0;
+	int i=0, mask=128;
+	char byte;
+	while(1){
+		check = read(input_pipe, &byte, 1);
+		if (check == -1 && errno == EAGAIN){continue;}
+		else if(check < 1){break;}
+		mask=128;
+		for(i = 0; i < 8; i++){
+			if(byte & mask){
+				write(output_pipe, "1",1);
+				printf("1");
+			}else{
+				write(output_pipe, "0",1);
+				printf("0");
+			}
+			mask = mask >> 1;
+		}
+		printf("\n");
+	}
+	close(output_pipe);
+	printf("CLOSING\n");
+}
+
 void send_data(int fd){
-/*Function writes single byte into dns cache by executing DNS queries.
+/*XXX:DEPRECATED in favor of sender_thread()!!!!
+ *
+ * Function writes single byte into dns cache by executing DNS queries.
  *It utilizes pthreads to send all 8 bits of byte simultaneously
- *XXX:We need to rework thread management
  *
  * Arguments
  * 	byte - integer value of which 8 least signiticants bits are taken
@@ -189,13 +295,13 @@ void send_data(int fd){
 		int j=128;
 		for(i = 0; i < 8; i++){
 			if(byte & j){
-				compose_name(query->domain_name, bitcounter_g);
+				compose_name(query->domain_name, BITCOUNTER);
 				query->name_server = servers->server;
 				exec_query(query);
 				strncpy(query->domain_name,"\0",1);
 			}
 			j = j >> 1;
-			++bitcounter_g;
+			++BITCOUNTER;
 			servers = servers->next;
 		}
 	}
@@ -366,6 +472,7 @@ void set_conf(char* var, char* value){
     int value_length = (int)strlen(value);
     if(strcasecmp(var, "server") == 0){
         set_servers(value);
+		CURRENT_SERVER = config->name_server;
         return;
     }
     if(strcasecmp(var, "base_name") == 0){
@@ -380,7 +487,10 @@ void set_conf(char* var, char* value){
         config->precision = atoi(value);
         return;
     }
-
+    if(strcasecmp(var, "max_speed") == 0){
+        config->max_speed = atoi(value);
+        return;
+    }
 
 
 }
@@ -496,7 +606,10 @@ void * file_to_fd(void ** args){
 	char buffer[1];
     while(1){
 		check = fread(&buffer,sizeof(char),1,fp);
-		if(check <= 0){break;}
+		if(check <= 0){
+			break;
+			printf("ERROR WRITING TO PIPE %d\n",check);
+		}
 		write(fd, &buffer, 1);
 	}
 	close(fd);
@@ -517,6 +630,10 @@ void * fd_to_file(void ** args){
 }
 
 int main(int argc, char** argv) {
+	pthread_mutexattr_t mutex_attr;
+	pthread_mutexattr_init(&mutex_attr);
+	pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
+	pthread_mutex_init(&LOCK, &mutex_attr);
     int c, option_flags=0;
     config = init_conf();
     //XXX:Dprecated config = malloc(sizeof(conf));
@@ -575,22 +692,48 @@ int main(int argc, char** argv) {
         printf("Sending Data...\n");
         int *byte = calloc(1,sizeof(int));
         int check = 1;
-        int fd[2];
-        pipe(fd);
-        pthread_t td = {0};
-        if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
-            void * compres_args[2]= {fd[1],fp};
-            pthread_create(&td, NULL, compresor, (void *) compres_args );
-			send_data(fd[0]);
-        }else{
-			void *args[2] = {fd[1],fp};
-            pthread_create(&td, NULL, file_to_fd, (void *) args );
-			send_data(fd[0]);
-        }
-		pthread_join(td, NULL);
-        close(fd[1]);
-		close(fd[0]);
+        int data_pipe[2];
+		int binary_pipe[2];
 
+        pipe(data_pipe);
+		int flags = fcntl(data_pipe, F_GETFL, 0);
+		fcntl(data_pipe[0], F_SETFL, O_NONBLOCK);
+		fcntl(data_pipe[1], F_SETFL, O_NONBLOCK);
+
+		pipe(binary_pipe);
+		fcntl(data_pipe[0], F_SETFL, O_NONBLOCK);
+		fcntl(data_pipe[1], F_SETFL, O_NONBLOCK);
+
+
+        pthread_t filestream_td = {0};
+        pthread_t bitstream_td = {0};
+
+		pthread_t *workers_td;
+		workers_td = create_threads(binary_pipe[0]);
+
+        if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
+            void * compres_args[2]= {data_pipe[1],fp};
+            pthread_create(&filestream_td, NULL, compresor, (void *) compres_args );
+
+			void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
+			pthread_create(&bitstream_td, NULL, stream_to_bits, (void *) stream_args);
+
+			pthread_join(filestream_td, NULL);
+			pthread_join(bitstream_td, NULL);
+			close(data_pipe[0]);
+        }else{
+			void *args[2] = {data_pipe[1],fp};
+            pthread_create(&filestream_td, NULL, file_to_fd, (void *) args );
+
+			void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
+			pthread_create(&bitstream_td, NULL, stream_to_bits, (void *) stream_args);
+	
+			pthread_join(filestream_td, NULL);
+			pthread_join(bitstream_td, NULL);
+			close(data_pipe[0]);
+        }
+			
+		join_threads(workers_td);
 
         fclose(fp);
         printf("Data sent successfuly\n");
