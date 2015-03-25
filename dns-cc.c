@@ -28,7 +28,9 @@
 typedef unsigned char     uint8_t;
 typedef unsigned short    uint16_t;
 
-static long BITCOUNTER = 0;
+unsigned long BITCOUNTER = 0;
+unsigned long REBUILD_INDEX = 0;
+
 
 //Config declarations
 typedef struct server_list{
@@ -97,34 +99,38 @@ void compose_name(char *output, int seq){
 }
 
 
-void bintostr(char *output, char *binstring){
-/*Function converts string of (ASCII encoded) ones and zeroes to
- * regular values (1Byte/character)
- *
- *Arguments:
- *	*output		- pointer to memmory where final string will be stored
- *	*binstring	- pointer to string (containing ones and zeroes)
- *
- * EXAMPLE:
- * 	If *binstring contains "0100000101100010", result written to *output will be "Ab"
- */
-    int i, y = 0, power, dec;
-    char toparse[1];
-    
-    for(i = 0; i < strlen(binstring); i += 8){
-        power = 7;
-        dec = 0;
-        for(y = 0; y < 8; y++ ){
-            strncpy(toparse, binstring +i + y, 1);
-            if(toparse[0] == 49){
-            dec += _pow(2, power);
-            }
-            power--;
-        }
-        toparse[0] = dec;
-        strncat(output, toparse, 1);
-    }
-    return;
+void bin_to_file(void ** args){
+	int output_fd = args[0];
+	int input_fd = args[1];
+	int bin_index = 7;
+	int check = 0;
+	char bit, byte = 0;
+	
+    while(1){
+		check = read(input_fd, &bit, 1);
+		if (check > 0){
+			REBUILD_INDEX++;
+			//printf("Bit: %c\n",bit);
+			if(strncmp(&bit,"1",1) == 0){
+				byte = (byte | (1 << bin_index));
+				bin_index--;
+			}else{
+				bin_index--;
+			}
+			if(bin_index == -1){
+				if(byte == 0){
+					END_THREADS = 1;
+					close(output_fd);
+					return;
+				}
+				write(output_fd, &byte,1);
+				//printf("Byte: %c\n",byte);
+				//printf("%c",byte);
+				bin_index = 7;
+				byte = 0;
+			}
+		}
+	}
 }
 
 void sender_thread(int fd){
@@ -136,7 +142,7 @@ void sender_thread(int fd){
 	query.domain_name = malloc(255);
 	while(1){
 		if(END_THREADS){
-			printf("Caught exit\n");
+			//printf("Caught exit\n");
 			return;
 		}
 
@@ -178,18 +184,14 @@ void join_threads(pthread_t *threads){
 
 }
 
-pthread_t * create_threads(int fd){
+pthread_t * create_senders(int fd){
 	const int count = 128;
-	int s_count;
 	int i;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-	//pthread_t threads[10] = {0};
 	pthread_t * threads = malloc(sizeof(pthread_t)*10);
 	
-	int arg = fd;
-
 	for(i = 0; i < 10; i++){
 		pthread_create(&threads[i], &attr, sender_thread, fd);
 		//printf("Original thread %u\n",threads[i]);
@@ -198,6 +200,68 @@ pthread_t * create_threads(int fd){
 	
 	return(threads);
 }
+
+
+void retriever_thread(int fd){
+	const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
+	struct timespec rem;
+	int result;
+	int c;
+	unsigned long my_bit;
+	ssize_t check;
+	query_t query;
+	query.domain_name = malloc(255);
+	//printf("[%u] Created\n",pthread_self());
+	while(1){
+		if(END_THREADS){
+			//printf("Caught exit\n");
+			return;
+		}
+
+		if(pthread_mutex_trylock(&LOCK) == 0){
+			nanosleep(&sleep_time, &rem);
+			my_bit = BITCOUNTER;
+			query.name_server = CURRENT_SERVER->server;
+			BITCOUNTER++;
+			CURRENT_SERVER = CURRENT_SERVER->next;
+			pthread_mutex_unlock(&LOCK);
+			compose_name(query.domain_name, my_bit);
+			//printf("[%u] name: %s\n",pthread_self(), query.domain_name);
+			//printf("[%u] server: %s\n",pthread_self(), query.name_server);
+			result = iscached(&query);
+			//printf("[%u] name: %s Result: %d\n",pthread_self(), query.domain_name, result);
+			strncpy(query.domain_name,"\0",1);
+			sprintf(&c,"%d",result);
+			while(1){
+				if(REBUILD_INDEX == my_bit){
+					write(fd,&c,1);
+					break;
+				}
+				if(END_THREADS){break;}
+			}
+		}
+	}
+
+
+}
+
+pthread_t * create_retrievers(int fd){
+	const int count = 128;
+	int i;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+	pthread_t * threads = malloc(sizeof(pthread_t)*10);
+	
+	for(i = 0; i < 10; i++){
+		pthread_create(&threads[i], &attr, retriever_thread, fd);
+		//printf("Original thread %u\n",threads[i]);
+
+	}
+	
+	return(threads);
+}
+
 
 void retrieve_msg(int desc_out, FILE *file_out){
 /*Function retrieves data from DNS cache. Either file descriptor (desc_out)
@@ -221,10 +285,10 @@ void retrieve_msg(int desc_out, FILE *file_out){
             byte = byte << 1;
             strcpy(name, "");
             compose_name(name ,i);
-            if (iscached(servers->server, name)){
+            /*if (iscached(servers->server, name)){
                 byte |= 1;
                 endofmsg =0;
-            }
+            }*/
 			servers = servers->next;
         }
 		counter++;
@@ -256,17 +320,17 @@ void stream_to_bits(void ** args){
 		for(i = 0; i < 8; i++){
 			if(byte & mask){
 				write(output_pipe, "1",1);
-				printf("1");
+				//printf("1");
 			}else{
 				write(output_pipe, "0",1);
-				printf("0");
+				//printf("0");
 			}
 			mask = mask >> 1;
 		}
-		printf("\n");
+		//printf("\n");
 	}
 	close(output_pipe);
-	printf("CLOSING\n");
+	//printf("CLOSING\n");
 }
 
 void send_data(int fd){
@@ -311,7 +375,7 @@ void send_data(int fd){
 }
 
 
-int iscached(char *server, char *name){
+int iscached(query_t *query){
 /*This function executes DNS query and emplys Weighted k-NN algorithm
  *(see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
  *to determine whether domain name was previously cached or not.
@@ -321,8 +385,8 @@ int iscached(char *server, char *name){
  *	name	- domain name to be queried
  */
 
-	query_t query = {.domain_name = name, .name_server = server};
-    int delay = exec_query(&query);
+    int delay = exec_query(query);
+	//printf("[%u] delay: %d\n", pthread_self(), delay);
     float distance = 0;
     float cached_score = 0;
     float uncached_score = 0;
@@ -558,14 +622,28 @@ void calibrate(){
     query_t query;
     query.domain_name = calloc(255, sizeof(char));
     struct server_list *servers = config->name_server;
-    for(i; i < config->precision; i++){
+    for(i = 0; i < config->precision; i++){
         query.name_server = servers->server;
         strcpy(query.domain_name, "precise.\0");
         compose_name(query.domain_name, i); 
         sample_times->uncached_set[i] = exec_query(&query);
         sample_times->cached_set[i] = exec_query(&query);
         servers = servers->next;
-    }   
+    }
+
+/*	printf("Cached:");
+	for(i = 0; i < config->precision; i++){
+	printf(" %d,",sample_times->cached_set[i]);
+	}
+	printf("\n");
+	
+	printf("uncached:");
+	for(i = 0; i < config->precision; i++){
+	printf(" %d,",sample_times->uncached_set[i]);
+	}
+	printf("\n");
+*/
+
     free(query.domain_name);
     return;
 }
@@ -593,9 +671,9 @@ void * decompresor(void ** args){
  *	arg[0]	- FILE pointer to opened output file
  *	arg[1]	- File descriptor to read end of pipe
  */
-    FILE *fp = (FILE *) args[0];
-    int fd = (int)args[1]; 
-    inflate_data(fd, fp);
+    int output_fd =  args[0];
+    int input_fd = (int)args[1]; 
+    //inflate_data(output_fd, input_fd);
     return;
 }
 
@@ -613,19 +691,6 @@ void * file_to_fd(void ** args){
 		write(fd, &buffer, 1);
 	}
 	close(fd);
-    return;
-}
-
-void * fd_to_file(void ** args){
-    FILE *fp = (FILE *) args[0];
-    int fd = (int)args[1]; 
-	int check = 0;
-	char buffer[1];
-    while(1){
-		check = read(fd, &buffer, 1);
-		if(check <= 0){break;}
-		fwrite(&buffer,sizeof(char),1,fp);
-	}
     return;
 }
 
@@ -709,7 +774,7 @@ int main(int argc, char** argv) {
         pthread_t bitstream_td = {0};
 
 		pthread_t *workers_td;
-		workers_td = create_threads(binary_pipe[0]);
+		workers_td = create_senders(binary_pipe[0]);
 
         if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
             void * compres_args[2]= {data_pipe[1],fp};
@@ -743,27 +808,46 @@ int main(int argc, char** argv) {
     }
     if((option_flags & READ_FLAG) == READ_FLAG){
     	FILE *fp = fopen(config->output_file,"wb");
+		int output_fd = fileno(fp);
         printf("Retrieving data...\n");
         calibrate();
 
-        int fd[2];
-        pipe(fd);
-        pthread_t td = {0};
+        int binary_pipe[2];
+        pipe(binary_pipe);
+
+		int data_pipe[2];
+		pipe(data_pipe);
+
+        pthread_t rebuild_td = {0};
+        pthread_t decompres_td = {0};
+
         if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG){
-            void * decompres_args[2]= {fp,fd[0]};
-            pthread_create(&td, NULL, decompresor, (void *) decompres_args );
-			retrieve_msg(fd[1], NULL);
-			close(fd[1]);
-            pthread_join(td, NULL);
+            void * decompres_args[2]= {output_fd,data_pipe[0]};
+            pthread_create(&decompres_td, NULL, inflate_data, (void *) decompres_args );
+
+			void * args[2] = {data_pipe[1], binary_pipe[0]};
+            pthread_create(&rebuild_td, NULL, bin_to_file, (void *) args );
+
+			pthread_t *workers_td = create_retrievers(binary_pipe[1]);
+
+    		pthread_join(rebuild_td, NULL);
+			pthread_join(decompres_td, NULL);
+			join_threads(workers_td);
+
 		}else{
-			void * args[2] = {fp, fd[0]};
-            pthread_create(&td, NULL, fd_to_file, (void *) args );
-        	retrieve_msg(fd[1],NULL);
-			close(fd[1]);
-            pthread_join(td, NULL);
+			void * args[2] = {output_fd, binary_pipe[0]};
+            pthread_create(&rebuild_td, NULL, bin_to_file, (void *) args );
+
+			pthread_t *workers_td = create_retrievers(binary_pipe[1]);
+
+        	pthread_join(rebuild_td, NULL);
+			join_threads(workers_td);
+
+
 		}
-		close(fd[0]);
+
 		printf("Done Reading\n");
+		close(output_fd);
 		fclose(fp);
         free_sample_times();
         free_conf(config);

@@ -61,8 +61,10 @@ int deflate_data(FILE *source, int fd_dest){
     return Z_OK;
 }
 
-int inflate_data(int source, FILE *dest)
+int inflate_data(void **args)
 {
+	int dest_fd = args[0];
+	int source_fd = args[1];
     int ret;
     unsigned have;
     z_stream strm;
@@ -84,10 +86,10 @@ int inflate_data(int source, FILE *dest)
     do {
 		for(i = 0; i < CHUNK;i++){
 			strm.avail_in++;
-			check  = read(source, &in[i], 1);
+			check  = read(source_fd, &in[i], 1);
 			if (check == 0){break;}
 		}
-        /*if (ferror(source)) {
+        /*if (ferror(source_fd)) {
             (void)inflateEnd(&strm);
             return Z_ERRNO;
         }*/
@@ -110,7 +112,7 @@ int inflate_data(int source, FILE *dest)
                 return ret;
             }
             have = CHUNK - strm.avail_out;
-            if (fwrite(out, 1, have, dest) != have || ferror(dest)) {
+            if (write(dest_fd, out, have) != have) {
                 (void)inflateEnd(&strm);
                 return Z_ERRNO;
             }

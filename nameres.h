@@ -3,7 +3,6 @@
 #include <arpa/inet.h>
 #include <ares.h>
 
-unsigned long TIMER[2] = {0,0};
 
 typedef struct query_t{
 	char *domain_name;
@@ -20,10 +19,10 @@ void gethostbyname_cb (void* arg, int status, int timeouts, struct hostent* host
         printf("lookup failed: %d\n",status);
 }
 
-void query_cb(void *arg, int status, int timeouts, unsigned char *abuf, int alen ){
+void time_query_cb(unsigned long *timer_slot, int status, int timeouts, unsigned char *abuf, int alen ){
 	struct timespec tv;
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
-	TIMER[1] = (tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec);
+	*timer_slot = (tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec);
 }
 
 void main_loop(ares_channel channel){
@@ -43,6 +42,7 @@ void main_loop(ares_channel channel){
 }
 
 int exec_query(query_t *query){
+	unsigned long timer[2] = {0,0};
     struct ares_options options;
 	struct timespec tv;
     int res = 500, delay;
@@ -59,11 +59,12 @@ int exec_query(query_t *query){
     }
     //ares_gethostbyname(channel, name, AF_INET, dns_callback, NULL);
     //main_loop(channel);
-    ares_query(channel, query->domain_name, 1 ,1, query_cb, NULL);
+    //TODO:Make it atomic!!!!
+    ares_query(channel, query->domain_name, 1 ,1, time_query_cb, &timer[1]);
 	clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
-	TIMER[0] = (tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec);
+	timer[0] = (tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec);
     main_loop(channel);
-	delay = TIMER[1] - TIMER[0];
+	delay = timer[1] - timer[0];
 	//printf("%lu\n",delay);
 	ares_destroy(channel);
 	free(server_addr);
