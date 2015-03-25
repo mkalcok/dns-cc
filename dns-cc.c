@@ -677,23 +677,6 @@ void * decompresor(void ** args){
     return;
 }
 
-void * file_to_fd(void ** args){
-    FILE *fp = (FILE *) args[1];
-    int fd = (int)args[0]; 
-	int check = 0;
-	char buffer[1];
-    while(1){
-		check = fread(&buffer,sizeof(char),1,fp);
-		if(check <= 0){
-			break;
-			printf("ERROR WRITING TO PIPE %d\n",check);
-		}
-		write(fd, &buffer, 1);
-	}
-	close(fd);
-    return;
-}
-
 int main(int argc, char** argv) {
 	pthread_mutexattr_t mutex_attr;
 	pthread_mutexattr_init(&mutex_attr);
@@ -755,6 +738,7 @@ int main(int argc, char** argv) {
             return(EXIT_FAILURE);
         }
         printf("Sending Data...\n");
+		int input_fd = fileno(fp);
         int *byte = calloc(1,sizeof(int));
         int check = 1;
         int data_pipe[2];
@@ -787,10 +771,7 @@ int main(int argc, char** argv) {
 			pthread_join(bitstream_td, NULL);
 			close(data_pipe[0]);
         }else{
-			void *args[2] = {data_pipe[1],fp};
-            pthread_create(&filestream_td, NULL, file_to_fd, (void *) args );
-
-			void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
+			void *stream_args[2] = {input_fd, binary_pipe[1]};
 			pthread_create(&bitstream_td, NULL, stream_to_bits, (void *) stream_args);
 	
 			pthread_join(filestream_td, NULL);
