@@ -143,7 +143,7 @@ void sender_thread(int fd){
 	query.domain_name = malloc(255);
 	while(1){
 		if(END_THREADS){
-			//printf("Caught exit\n");
+			free(query.domain_name);
 			return;
 		}
 
@@ -182,6 +182,7 @@ void join_threads(pthread_t *threads){
 		check = pthread_join(threads[i], NULL);
 		//printf("JOINED thread %u with status %d\n",threads[i], check);
 	}
+	free(threads);
 
 }
 
@@ -215,7 +216,7 @@ void retriever_thread(int fd){
 	//printf("[%u] Created\n",pthread_self());
 	while(1){
 		if(END_THREADS){
-			//printf("Caught exit\n");
+			free(query.domain_name);
 			return;
 		}
 
