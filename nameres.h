@@ -30,7 +30,11 @@ void norecurse_query_cb(int *response, int status, int timeouts, unsigned char *
 		*response = 0;
 	}else if(status == ARES_SUCCESS){
 		*response = 1;
+	}else{
+		//TODO:Temporary solution if other error occures
+		*response = 1;
 	}
+	
 }
 
 void main_loop(ares_channel channel){
