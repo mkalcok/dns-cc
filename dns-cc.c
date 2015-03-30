@@ -47,6 +47,7 @@ typedef struct conf{
     char *key;
     int precision;
 	int max_speed;
+	int (*method)(query_t*);
     } conf;
 
 static struct conf *config;
@@ -228,7 +229,10 @@ void retriever_thread(int fd){
 			compose_name(query.domain_name, my_bit);
 			//printf("[%u] name: %s\n",pthread_self(), query.domain_name);
 			//printf("[%u] server: %s\n",pthread_self(), query.name_server);
-			result = iscached(&query);
+
+			result = config->method(&query);
+
+
 			//printf("[%u] name: %s Result: %d\n",pthread_self(), query.domain_name, result);
 			strncpy(query.domain_name,"\0",1);
 			sprintf(&c,"%d",result);
@@ -374,8 +378,11 @@ void send_data(int fd){
     return;
 }
 
+int iscached_iter(query_t *query){
+	return(exec_query_no_recurse(query));
+}
 
-int iscached(query_t *query){
+int iscached_time(query_t *query){
 /*This function executes DNS query and emplys Weighted k-NN algorithm
  *(see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
  *to determine whether domain name was previously cached or not.
@@ -493,14 +500,11 @@ void remove_blank(char *str){
 }
 
 void test(){
-	struct server_list *a = config->name_server;
-	struct server_list *n,*p;
-	n = a;
-	while(1){
-		printf("%s\n",n->server);
-		n = n->next;
-		sleep(1);
-	}
+	char name_server[20]="192.168.33.100";
+	char domain_name[20] = "test0.diplo.sk";
+	query_t query = {.domain_name = &domain_name, .name_server = &name_server };
+	exec_query_no_recurse(&query);
+	//exec_query(&query);
 }
 
 void set_servers(char *servers){
@@ -688,8 +692,13 @@ int main(int argc, char** argv) {
     char ch[1];
     FILE *fp;
     char cfg_file[100];
-    while((c = getopt(argc, argv, "DCc:s:r:")) != -1){
+    while((c = getopt(argc, argv, "tDCm:c:s:r:")) != -1){
         switch (c){
+			case 't':
+				//testing option
+				read_conf_file();
+				test();
+				exit(EXIT_SUCCESS);
             case 'c':
                 //Redefine config file
                 free(config->conf_file);
@@ -711,8 +720,24 @@ int main(int argc, char** argv) {
             case 'r':
 				//program is to recieve data from DNS server and write them into file.
                 config->output_file = set_member(optarg, strlen(optarg));
+				if (config->method == NULL){
+					//If method is not set, use default
+					config->method = &iscached_time;
+				}
                 option_flags += READ_FLAG;
                 break;
+			case 'm':
+				//define method which is used to determine if bit was cached or no
+				if(strcmp(optarg, "time") == 0){
+					config->method = &iscached_time;
+				}else if(strcmp(optarg, "iterative") == 0){
+					config->method = &iscached_iter;
+				}else{
+					printf("ERROR: Unknown method\n");
+					help();
+					return(EXIT_FAILURE);
+				}
+				break;
             default:
                 help();
                 return(EXIT_FAILURE);
@@ -725,6 +750,7 @@ int main(int argc, char** argv) {
     }
     
     read_conf_file();
+
     if((option_flags & SEND_FLAG) == SEND_FLAG){
         if (strcmp(config->input_file,"-") == 0){
             printf("Type in your message (end with ^D):  ");
