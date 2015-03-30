@@ -28,7 +28,7 @@ void time_query_cb(unsigned long *timer_slot, int status, int timeouts, unsigned
 void norecurse_query_cb(int *response, int status, int timeouts, unsigned char *abuf, int alen ){
 	if(status == ARES_ENODATA || status == ARES_ESERVFAIL){
 		*response = 0;
-		printf("ares status: %d\n",status);
+		//printf("ares status: %d\n",status);
 	}else if(status == ARES_SUCCESS || status == ARES_ENOTFOUND){
 		*response = 1;
 	}else{
