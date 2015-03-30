@@ -26,9 +26,10 @@ void time_query_cb(unsigned long *timer_slot, int status, int timeouts, unsigned
 }
 
 void norecurse_query_cb(int *response, int status, int timeouts, unsigned char *abuf, int alen ){
-	if(status == ARES_ENODATA){
+	if(status == ARES_ENODATA || status == ARES_ESERVFAIL){
 		*response = 0;
-	}else if(status == ARES_SUCCESS){
+		printf("ares status: %d\n",status);
+	}else if(status == ARES_SUCCESS || status == ARES_ENOTFOUND){
 		*response = 1;
 	}else{
 		//TODO:Temporary solution if other error occures
@@ -85,7 +86,7 @@ int exec_query_no_recurse(query_t *query){
     int res, response;
 	struct in_addr *server_addr = malloc(sizeof(struct in_addr));
     inet_aton(query->name_server, server_addr);
-	options.flags = ARES_FLAG_NORECURSE;
+	options.flags = (ARES_FLAG_NORECURSE | ARES_FLAG_NOCHECKRESP);
 	options.servers = server_addr;
 	options.nservers = 1;
     ares_channel channel;
