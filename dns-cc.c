@@ -443,13 +443,15 @@ conf* init_conf(){
 
 void free_servers(struct server_list *root){
 	struct server_list *n = root->next;
-	while(1){
-		free(n->server);
-		if(n->next == root){break;}
-		n = n->next;
+	if (root != root->next){
+		while(1){
+			free(n->server);
+			if(n->next == root){break;}
+			free(n);
+			n = n->next;
+		}
 	}
 	free(root->server);
-	free(root->next);
 	free(root);
 
 }
@@ -500,10 +502,12 @@ void remove_blank(char *str){
 }
 
 void test(){
-	char name_server[20]="192.168.33.100";
-	char domain_name[20] = "test0.diplo.sk";
+	char name_server[20]="208.67.222.222";
+	char domain_name[20] = "cccc.stuba.sk";
+	int result;
 	query_t query = {.domain_name = &domain_name, .name_server = &name_server };
-	exec_query_no_recurse(&query);
+	result = exec_query_no_recurse(&query);
+	printf("Result %d\n", result);
 	//exec_query(&query);
 }
 
