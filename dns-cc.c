@@ -24,8 +24,10 @@
 #define READ_FLAG  4
 #define COMPRESS_FLAG  8
 
-unsigned long BITCOUNTER = 0;
-unsigned long REBUILD_INDEX = 0;
+uint32_t BIT_INDEX = 32;
+uint32_t DATA_LENGTH;
+uint32_t LENGTH_INDEX = 0;
+unsigned long REBUILD_INDEX = 32;
 
 
 //Config declarations
@@ -57,7 +59,7 @@ typedef struct sample {
 
 static struct sample *sample_times;
 
-int END_THREADS = 0;
+int DATA_END = 0;
 pthread_mutex_t LOCK;
 struct server_list *CURRENT_SERVER;
 
@@ -104,7 +106,7 @@ void bin_to_file(void **args) {
     int byte = 0;
     char bit;
 
-    while (1) {
+    while (REBUILD_INDEX <= DATA_LENGTH) {
         check = read(input_fd, &bit, 1);
         if (check > 0) {
             REBUILD_INDEX++;
@@ -116,11 +118,6 @@ void bin_to_file(void **args) {
                 bin_index--;
             }
             if (bin_index == -1) {
-                if (byte == 0) {
-                    END_THREADS = 1;
-                    close(output_fd);
-                    return;
-                }
                 write(output_fd, &byte, 1);
                 //printf("Byte: %c\n",byte);
                 //printf("%c",byte);
@@ -129,46 +126,67 @@ void bin_to_file(void **args) {
             }
         }
     }
+    DATA_END = 1;
 }
 
 void sender_thread(int *fd) {
     const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
     struct timespec rem;
     char c;
+    int bitmask;
     ssize_t check;
     query_t query;
-    query.domain_name = malloc(255);
-    while (1) {
-        if (END_THREADS) {
-            free(query.domain_name);
-            return;
-        }
-
+    query.domain_name = calloc(255, sizeof(char));
+    while (!DATA_END) {
         if (pthread_mutex_trylock(&LOCK) == 0) {
             check = read(*fd, &c, 1);
             if (check > 0) {
                 if (strncmp(&c, "1", 1) == 0) {
-                    compose_name(query.domain_name, BITCOUNTER);
+                    compose_name(query.domain_name, BIT_INDEX);
                     query.name_server = CURRENT_SERVER->server;
-                    BITCOUNTER++;
+                    BIT_INDEX++;
                     CURRENT_SERVER = CURRENT_SERVER->next;
                     pthread_mutex_unlock(&LOCK);
                     exec_query(&query);
                     strncpy(query.domain_name, "\0", 1);
                 } else {
-                    BITCOUNTER++;
+                    BIT_INDEX++;
                     CURRENT_SERVER = CURRENT_SERVER->next;
                     pthread_mutex_unlock(&LOCK);
                 }
             } else if (check == -1 && errno == EAGAIN) {
                 pthread_mutex_unlock(&LOCK);
             } else {
-                END_THREADS = 1;
+                DATA_LENGTH = BIT_INDEX - 32;
+                CURRENT_SERVER = config->name_server;
+                DATA_END = 1;
                 pthread_mutex_unlock(&LOCK);
             }
         }
         nanosleep(&sleep_time, &rem);
     }
+
+    while (LENGTH_INDEX < 32){
+        if ((pthread_mutex_trylock(&LOCK)) == 0){
+            bitmask = 1 << LENGTH_INDEX;
+            if(bitmask == (bitmask & DATA_LENGTH)){
+                compose_name(query.domain_name, LENGTH_INDEX);
+                query.name_server = CURRENT_SERVER->server;
+                LENGTH_INDEX++;
+                CURRENT_SERVER = CURRENT_SERVER->next;
+                pthread_mutex_unlock(&LOCK);
+                exec_query(&query);
+                strncpy(query.domain_name, "\0", 1);
+            }else{
+                LENGTH_INDEX++;
+                CURRENT_SERVER = CURRENT_SERVER->next;
+                pthread_mutex_unlock(&LOCK);
+            }
+        }
+        nanosleep(&sleep_time, &rem);
+    }
+    free(query.domain_name);
+    return;
 }
 
 
@@ -208,19 +226,14 @@ void retriever_thread(int *fd) {
     char c;
     unsigned long my_bit;
     query_t query;
-    query.domain_name = malloc(255);
+    query.domain_name = calloc(255,sizeof(char));
     //printf("[%u] Created\n",pthread_self());
-    while (1) {
-        if (END_THREADS) {
-            free(query.domain_name);
-            return;
-        }
-
+    while (!DATA_END) {
         if (pthread_mutex_trylock(&LOCK) == 0) {
             nanosleep(&sleep_time, &rem);
-            my_bit = BITCOUNTER;
+            my_bit = BIT_INDEX;
             query.name_server = CURRENT_SERVER->server;
-            BITCOUNTER++;
+            BIT_INDEX++;
             CURRENT_SERVER = CURRENT_SERVER->next;
             pthread_mutex_unlock(&LOCK);
             compose_name(query.domain_name, my_bit);
@@ -238,11 +251,12 @@ void retriever_thread(int *fd) {
                     write(*fd, &c, 1);
                     break;
                 }
-                if (END_THREADS) { break; }
+                if (DATA_END) { break; }
             }
         }
     }
-
+    free(query.domain_name);
+    return;
 
 }
 
@@ -535,6 +549,21 @@ void free_sample_times() {
     free(sample_times);
 }
 
+void get_data_length() {
+    query_t query;
+    query.domain_name = calloc(255, sizeof(char));
+    int result;
+    for (LENGTH_INDEX; LENGTH_INDEX < 32; LENGTH_INDEX++ ) {
+        compose_name(query.domain_name, LENGTH_INDEX);
+        query.name_server = CURRENT_SERVER->server;
+        result = config->method(&query);
+        DATA_LENGTH = (DATA_LENGTH | (result << LENGTH_INDEX));
+        strncpy(query.domain_name, "\0", 1);
+    }
+    DATA_LENGTH += 32;
+    CURRENT_SERVER = config->name_server;
+    free(query.domain_name);
+}
 
 void calibrate() {
 /*Function colects sample times for cached and not cached domain names.
@@ -719,6 +748,7 @@ int main(int argc, char **argv) {
         int output_fd = fileno(output_fp);
         printf("Retrieving data...\n");
         calibrate();
+        get_data_length();
 
         int binary_pipe[2];
         pipe(binary_pipe);
