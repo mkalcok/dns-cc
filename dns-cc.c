@@ -14,6 +14,7 @@
 #include "nameres.h"
 #include <fcntl.h>
 #include <ctype.h>
+#include <signal.h>
 /*
  * 
  */
@@ -23,19 +24,59 @@
 #define SEND_FLAG  2
 #define READ_FLAG  4
 #define COMPRESS_FLAG  8
+#define INTERACTIVE_FLAG 16
 
-uint32_t BIT_INDEX = 32;
-uint32_t DATA_LENGTH;
-uint32_t LENGTH_INDEX = 0;
+/*Domain name prefixes used in interactive mode
+ * to separate user data and singalisation*/
+char USER1_SYNC[6] = "1sync";
+char USER2_SYNC[6] = "2sync";
+char USER1_PREFIX[6] = "1user";
+char USER2_PREFIX[6] = "2user";
+
+//Global variables used by S_ender in interactive mode
+uint32_t S_BIT_INDEX = 32;
+uint32_t S_DATA_LENGTH;
+uint32_t S_LENGTH_INDEX = 0;
+uint32_t S_LENGTH_INDEX_REL = 0;
+uint32_t S_LENGTH_INDEX_STOP = 31;
+
+//Global variables used by R_eceiver in interactive mode
+uint32_t R_BIT_INDEX = 32;
+uint32_t R_DATA_LENGTH;
+uint32_t R_DATA_END = 0;
+uint32_t R_LENGTH_INDEX = 0;
+
+//Global variables to hold index of last used synchronization bit
+uint32_t BUDDY_SYNC_INDEX = 0;
+uint32_t MY_SYNC_INDEX = 0;
+
+/*Global variable used by bin_to_file method to put bits back together
+ *in correct order.*/
 unsigned long REBUILD_INDEX = 32;
 
 
-//Config declarations
+//Structure to hold assigned prefixes in interactive mode
+typedef struct prefix_config_t {
+    char *my_sync;
+    char *buddy_sync;
+    char *my_data_prefix;
+    char *buddy_data_prefix;
+}sync_target_t;
+
+static struct prefix_config_t prefix_config = {
+        .my_sync = NULL,
+        .buddy_sync = NULL,
+        .my_data_prefix = NULL,
+        .buddy_data_prefix = NULL
+};
+
+//Circular linked list of DNS servers
 typedef struct server_list {
     char *server;
     struct server_list *next;
 } server_list;
 
+//Global configuration variables
 typedef struct conf {
     char *conf_file;
     char *input_file;
@@ -51,6 +92,7 @@ typedef struct conf {
 
 static struct conf *config;
 
+//Structure to hold sample times learned during calibration
 typedef struct sample {
     int *cached_set;
     int *uncached_set;
@@ -59,13 +101,24 @@ typedef struct sample {
 
 static struct sample *sample_times;
 
-int DATA_END = 0;
-pthread_mutex_t LOCK;
+//Global variables used to control loops in separate threads
+int END_WORKERS = 0;
+int END_INTERACTIVE = 0;
+
+//Mutexes for multi-threading synchronization
+pthread_mutex_t SENDER_LOCK;
+pthread_mutex_t RETRIEVER_LOCK;
+
+/*Pointer to a server that should be used for reading/writing
+ *of next bit*/
 struct server_list *CURRENT_SERVER;
 
 int _pow(int base, int exp) {
 /*
- *Recursive function, returns value of base^exp
+ * Recursive function, returns value of base^exp
+ * Arguments:
+ *      (int) base - base number
+ *      (int) exp  - exponent
  */
     return exp == 0 ? 1 : base * _pow(base, exp - 1);
 }
@@ -80,6 +133,16 @@ double absolute_value(double a) {
     return (a);
 }
 
+void sig_handler(int sig_num){
+    /*
+     * TODO:NOT IMPLEMENTED YET!
+     * Function used to gracefully end interactive mode after SIGINT
+     * was caught
+     * Arguments:
+     *      (int) sig_num - Ignored
+     */
+    END_INTERACTIVE = 1;
+}
 void compose_name(char *output, unsigned long seq) {
 /*Function creates  domain name to be queried.
  *
@@ -88,6 +151,8 @@ void compose_name(char *output, unsigned long seq) {
  *	 seq	- sequence number that gets appended to domain name (see NOTE)
  *
  *NOTE: This is very much a dummy function for now, lacking any complexity
+ *
+ * TODO: Merge with compose_sync_name() because data bits now use prefixes too
  */
     char charseq[10];
     sprintf(charseq, "%lu", seq);
@@ -97,8 +162,38 @@ void compose_name(char *output, unsigned long seq) {
     return;
 }
 
+void compose_sync_name(char *output, char *sync_target, unsigned long seq) {
+    /*
+     * Very Similar to compose_name() function but takes (char *)pointer to a sync_target
+     * which is prepended before name.
+     * Used to create domain names for synchronization bits.
+     * Arguments:
+     *      (char *) output         - char buffer to which a final name is composed
+     *      (char *) sync_target    - prefix that is added before actual name
+     *      (unsigned long) seq     - sequence number
+     *
+     */
+    char str_index[32];
+    sprintf(str_index, "%d", seq);
+    strcpy(output, sync_target);
+    strncat(output, str_index, sizeof(str_index));
+    compose_name(output, 0);
+}
+
 
 void bin_to_file(void **args) {
+    /*
+     * Function used to rebuild recieved bits back into bytes in correct order.
+     * It is responsible for incrementing REBUILD_INDEX that is used by retriever_thread()
+     * to determine which bit should be passed (via pipe) to this function.
+     * Rebuilt bytes are written into output pipe.
+     * Arguments:
+     *      (void **) args  - pointer to array of two file descriptors that
+     *                        represents input and output pipe
+     *
+     * TODO:Rework synchronization. If retriever_thread() fails to get 1 bit, whole process is blocked
+     * TODO:Rework input argument to predefined structure
+     */
     int output_fd = (int)args[0];
     int input_fd = (int)args[1];
     int bin_index = 7;
@@ -106,7 +201,7 @@ void bin_to_file(void **args) {
     int byte = 0;
     char bit;
 
-    while (REBUILD_INDEX <= DATA_LENGTH) {
+    while (REBUILD_INDEX < R_DATA_END) {
         check = read(input_fd, &bit, 1);
         if (check > 0) {
             REBUILD_INDEX++;
@@ -126,61 +221,91 @@ void bin_to_file(void **args) {
             }
         }
     }
-    DATA_END = 1;
+    //END_WORKERS = 1;
 }
 
 void sender_thread(int *fd) {
+    /*
+     * Function that is intended to run as separate thread. It reads data from pipe (specified by *fd) 1 byte
+     * at a time. Recieved bytes are expected to be chars (either "0" or "1")representing bits of data to be sent.
+     * If "1" is recieved, this bit is cached to a DNS server in CURRENT_SERVER with sequence number of S_BIT_INDEX.
+     * Every received bit inceases S_DATA_LENGTH counter which represents length of whole message. At the end, value of
+     * S_DATA_LENGTH is written into first 32bits of message.
+     *
+     * Arguments:
+     *      (int *) fd  - pointer to file descriptor that is reading end of pipe
+     */
     const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
     struct timespec rem;
     char c;
+    char *prefix;
+    size_t prefix_len;
     int bitmask;
     ssize_t check;
     query_t query;
     query.domain_name = calloc(255, sizeof(char));
-    while (!DATA_END) {
-        if (pthread_mutex_trylock(&LOCK) == 0) {
+    if(!prefix_config.buddy_data_prefix){
+        prefix = malloc(1);
+        strncpy(prefix,"\0",1);
+        prefix_len = 1;
+    }else{
+        prefix = prefix_config.buddy_data_prefix;
+        prefix_len = strlen(prefix) + 1;
+    }
+
+    while (!END_WORKERS) {
+        if (pthread_mutex_trylock(&SENDER_LOCK) == 0) {
+
+            if(END_WORKERS){
+                pthread_mutex_unlock(&SENDER_LOCK);
+                break;
+            }
+
             check = read(*fd, &c, 1);
             if (check > 0) {
                 if (strncmp(&c, "1", 1) == 0) {
-                    compose_name(query.domain_name, BIT_INDEX);
+                    strncpy(query.domain_name, prefix, prefix_len);
+                    compose_name(query.domain_name, S_BIT_INDEX);
                     query.name_server = CURRENT_SERVER->server;
-                    BIT_INDEX++;
+                    S_BIT_INDEX++;
+                    S_DATA_LENGTH++;
                     CURRENT_SERVER = CURRENT_SERVER->next;
-                    pthread_mutex_unlock(&LOCK);
+                    pthread_mutex_unlock(&SENDER_LOCK);
                     exec_query(&query);
-                    strncpy(query.domain_name, "\0", 1);
                 } else {
-                    BIT_INDEX++;
+                    S_BIT_INDEX++;
+                    S_DATA_LENGTH++;
                     CURRENT_SERVER = CURRENT_SERVER->next;
-                    pthread_mutex_unlock(&LOCK);
+                    pthread_mutex_unlock(&SENDER_LOCK);
                 }
             } else if (check == -1 && errno == EAGAIN) {
-                pthread_mutex_unlock(&LOCK);
+                pthread_mutex_unlock(&SENDER_LOCK);
             } else {
-                DATA_LENGTH = BIT_INDEX - 32;
                 CURRENT_SERVER = config->name_server;
-                DATA_END = 1;
-                pthread_mutex_unlock(&LOCK);
+                END_WORKERS = 1;
+                pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
         nanosleep(&sleep_time, &rem);
     }
 
-    while (LENGTH_INDEX < 32){
-        if ((pthread_mutex_trylock(&LOCK)) == 0){
-            bitmask = 1 << LENGTH_INDEX;
-            if(bitmask == (bitmask & DATA_LENGTH)){
-                compose_name(query.domain_name, LENGTH_INDEX);
+    while (S_LENGTH_INDEX <= S_LENGTH_INDEX_STOP){
+        if ((pthread_mutex_trylock(&SENDER_LOCK)) == 0){
+            bitmask = 1 << S_LENGTH_INDEX_REL;
+            if(bitmask == (bitmask & S_DATA_LENGTH)){
+                strncpy(query.domain_name, prefix, prefix_len);
+                compose_name(query.domain_name, S_LENGTH_INDEX);
                 query.name_server = CURRENT_SERVER->server;
-                LENGTH_INDEX++;
+                S_LENGTH_INDEX++;
+                S_LENGTH_INDEX_REL++;
                 CURRENT_SERVER = CURRENT_SERVER->next;
-                pthread_mutex_unlock(&LOCK);
+                pthread_mutex_unlock(&SENDER_LOCK);
                 exec_query(&query);
-                strncpy(query.domain_name, "\0", 1);
             }else{
-                LENGTH_INDEX++;
+                S_LENGTH_INDEX++;
+                S_LENGTH_INDEX_REL++;
                 CURRENT_SERVER = CURRENT_SERVER->next;
-                pthread_mutex_unlock(&LOCK);
+                pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
         nanosleep(&sleep_time, &rem);
@@ -191,6 +316,12 @@ void sender_thread(int *fd) {
 
 
 void join_threads(pthread_t *threads) {
+    /*
+     * Function that joins array of 10 worker threads pointed to by *threads. This is used to join threads created by
+     * create_senders() and create_retrievers().
+     * Arguments:
+     *      (pthread_t *) threads   - pointer to array of 10 pthread_t
+     */
     int i, check;
     for (i = 0; i < 10; i++) {
         //printf("WAITING FOR thread %u\n",threads[i]);
@@ -202,7 +333,13 @@ void join_threads(pthread_t *threads) {
 }
 
 pthread_t *create_senders(int *fd) {
-    //const int count = 128;
+    /*
+     * Function creates 10 threads executing sender_thread() function.
+     * Arguments:
+     *      (int*) fd   - pointer to file descriptor that is passed to sender_thread()
+     * Return:
+     *      Function returns pointer to array of 10 pthread_t
+     */
     int i;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -220,38 +357,62 @@ pthread_t *create_senders(int *fd) {
 
 
 void retriever_thread(int *fd) {
+    /*
+     * Function that is intended to run as separate thread. It receives bits with sequence numbers of R_BIT_INDEX from
+     * DNS server in CURRENT_SERVER. After bit is received, function waits until REBUILD_INDEX matches sequence number
+     * of recieved bit. When they match, 1 byte ("0" or "1") representing bit is written into pipe pointed to by *fd.
+     * Method used to determine wether bit was in cache or not is pointe to by config->method()
+     *
+     * Arguments:
+     *      (int*) fd   - pointer to a file descriptor (writing end of pipe)
+     */
     const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
     struct timespec rem;
     int result;
     char c;
+    char *prefix;
+    size_t prefix_len;
     unsigned long my_bit;
     query_t query;
     query.domain_name = calloc(255,sizeof(char));
+
+    if(!prefix_config.my_data_prefix){
+        prefix = malloc(1);
+        strncpy(prefix,"\0",1);
+        prefix_len = 1;
+    }else{
+        prefix = prefix_config.my_data_prefix;
+        prefix_len = strlen(prefix) + 1;
+    }
+
     //printf("[%u] Created\n",pthread_self());
-    while (!DATA_END) {
-        if (pthread_mutex_trylock(&LOCK) == 0) {
+    while (R_BIT_INDEX < R_DATA_END) {
+        if (pthread_mutex_trylock(&RETRIEVER_LOCK) == 0) {
+
+            if(R_BIT_INDEX >= R_DATA_END){
+                pthread_mutex_unlock(&RETRIEVER_LOCK);
+                break;}
+
             nanosleep(&sleep_time, &rem);
-            my_bit = BIT_INDEX;
+            my_bit = R_BIT_INDEX;
             query.name_server = CURRENT_SERVER->server;
-            BIT_INDEX++;
+            R_BIT_INDEX++;
             CURRENT_SERVER = CURRENT_SERVER->next;
-            pthread_mutex_unlock(&LOCK);
+            pthread_mutex_unlock(&RETRIEVER_LOCK);
+            strncpy(query.domain_name, prefix, prefix_len);
             compose_name(query.domain_name, my_bit);
             //printf("[%u] name: %s\n",pthread_self(), query.domain_name);
             //printf("[%u] server: %s\n",pthread_self(), query.name_server);
 
             result = config->method(&query);
-
-
             //printf("[%u] name: %s Result: %d\n",pthread_self(), query.domain_name, result);
-            strncpy(query.domain_name, "\0", 1);
             sprintf(&c, "%d", result);
             while (1) {
                 if (REBUILD_INDEX == my_bit) {
                     write(*fd, &c, 1);
                     break;
                 }
-                if (DATA_END) { break; }
+                if (END_WORKERS) { break; }
             }
         }
     }
@@ -261,7 +422,13 @@ void retriever_thread(int *fd) {
 }
 
 pthread_t *create_retrievers(int *fd) {
-    //const int count = 128;
+    /*
+     * Function creates 10 threads executing retriever_thread() function.
+     * Arguments:
+     *      (int*) fd   - pointer to file descriptor that is passed to retriever_thread()
+     * Return:
+     *      Function returns pointer to array of 10 pthread_t
+     */
     int i;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -279,6 +446,15 @@ pthread_t *create_retrievers(int *fd) {
 
 
 void stream_to_bits(void **args) {
+    /*
+     * Function used to convert bytes from input_pipe into bits and write their representation (either "0" or "1")
+     * int output_pipe. On the other end of output_pipe there is sender_thread() function that takse care of writing
+     * these bits into cache of DNS server.
+     * Arguments:
+     *      (void**) args   - pointer to array of 2 file descriptors representing input_pipe (arg[0]) and output pipe
+     *                        (arg[1])
+     * TODO:Rework input argument to predefined structure
+     */
     int input_pipe = (int) args[0];
     int output_pipe = (int) args[1];
     ssize_t check = 0;
@@ -306,18 +482,24 @@ void stream_to_bits(void **args) {
 }
 
 int iscached_iter(query_t *query) {
+    /*
+     * This function executes non-recursive DNS query to determine whether bit was previously cached or not.
+     * Arguments:
+     *      (query_t*) query    - structure that holds information about query (domain_name, name_server)
+     *
+     * NOTE: this function server as wrapper for sake of naming consistency.
+     */
     return (exec_query_no_recurse(query));
 }
 
 int iscached_time(query_t *query) {
-/*This function executes DNS query and emplys Weighted k-NN algorithm
- *(see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
- *to determine whether domain name was previously cached or not.
- *
- *Arguments:
- *	server	- address of DNS server
- *	name	- domain name to be queried
- */
+    /* This function executes DNS query and employs Weighted k-NN algorithm
+     * (see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
+     * to determine whether domain name was previously cached or not.
+     *
+     * Arguments:
+     *      (query_t*) query    - structure that holds information about query (domain_name, name_server)
+     */
 
     int delay = exec_query(query);
     //printf("[%u] delay: %d\n", pthread_self(), delay);
@@ -369,6 +551,11 @@ conf *init_conf() {
 }
 
 void free_servers(struct server_list *root) {
+    /*
+     * Function frees alle elements of circular linked list formed by struct server_list
+     * Arguments:
+     *      (struct server_list*) root  - pointer to any element in circular linked list
+     */
     struct server_list *n = root->next;
     if (root != root->next) {
         while (1) {
@@ -432,6 +619,9 @@ void remove_blank(char *str) {
 }
 
 void test() {
+    /*
+     * Used for testing purposes only!
+     */
     char name_server[20] = "208.67.222.222";
     char domain_name[20] = "cccc.stuba.sk";
     int result;
@@ -442,6 +632,13 @@ void test() {
 }
 
 void set_servers(char *servers) {
+    /*
+     * Function used to create circular linked list of struct server_list
+     * Arguments:
+     *      (char*) servers - pointer to comma separated string containing IP addresses of DNS servers
+     *
+     * TODO:Perform IP address sanity check
+     */
     char *token;
     struct server_list *prev, *new, *first;
 
@@ -454,7 +651,7 @@ void set_servers(char *servers) {
     prev = first;
 
     while ((token = strsep(&servers, ","))) {
-        //#XXX:Valgrind says I'm loosing memory here
+        //XXX:Valgrind says I'm loosing memory here
         new = calloc(1, sizeof(server_list));
         new->server = calloc(1, strlen(token));
         strncpy(new->server, token, strlen(token));
@@ -550,17 +747,40 @@ void free_sample_times() {
 }
 
 void get_data_length() {
+    /*
+     * Function reads first 4 bytes of message starting at sequence number of R_LENGTH_INDEX to determine overall
+     * length of message (in bits) whch is then set to R_DATA_LENGTH
+     *
+     * NOTE: Final length includes also first 4 bytes used as length header.
+     */
     query_t query;
     query.domain_name = calloc(255, sizeof(char));
     int result;
-    for (LENGTH_INDEX; LENGTH_INDEX < 32; LENGTH_INDEX++ ) {
-        compose_name(query.domain_name, LENGTH_INDEX);
+    int index_stop = R_LENGTH_INDEX + 32;
+    int relative_index = 0;
+    char *prefix;
+    size_t prefix_len;
+
+    if(!prefix_config.my_data_prefix){
+        prefix = malloc(1);
+        strncpy(prefix,"\0",1);
+        prefix_len = 1;
+    }else{
+        prefix = prefix_config.my_data_prefix;
+        prefix_len = strlen(prefix) + 1;
+    }
+
+    R_DATA_LENGTH = 0;
+    for (R_LENGTH_INDEX; R_LENGTH_INDEX < index_stop; R_LENGTH_INDEX++) {
+        strncpy(query.domain_name, prefix, prefix_len);
+        compose_name(query.domain_name, R_LENGTH_INDEX);
         query.name_server = CURRENT_SERVER->server;
         result = config->method(&query);
-        DATA_LENGTH = (DATA_LENGTH | (result << LENGTH_INDEX));
-        strncpy(query.domain_name, "\0", 1);
+        R_DATA_LENGTH = (R_DATA_LENGTH | (result << relative_index));
+        relative_index++;
     }
-    DATA_LENGTH += 32;
+    R_DATA_LENGTH += 32;
+    R_DATA_END += R_DATA_LENGTH;
     CURRENT_SERVER = config->name_server;
     free(query.domain_name);
 }
@@ -570,6 +790,7 @@ void calibrate() {
  *Number of samples is based on config->precision defined by user
  *
  */
+    srand(time(NULL));
     sample_times = init_sample_times();
     unsigned int i = 0;
     query_t query;
@@ -578,7 +799,7 @@ void calibrate() {
     for (i = 0; i < config->precision; i++) {
         query.name_server = servers->server;
         strcpy(query.domain_name, "precise.\0");
-        compose_name(query.domain_name, i);
+        compose_name(query.domain_name, (unsigned long) rand());
         sample_times->uncached_set[i] = exec_query(&query);
         sample_times->cached_set[i] = exec_query(&query);
         servers = servers->next;
@@ -601,6 +822,162 @@ void calibrate() {
     return;
 }
 
+void get_sync_target(){
+    /*
+     * Function used in interactive mode to determine users position in conversation (either user1 or user2,
+     * more users are not supported). If both conversation slots are full,program ends.
+     * After successfully finding slot, prefix_config structure is filled with proper values for two way interactive
+     * conversation.
+     */
+    query_t query_first;
+    query_t query_second;
+    query_first.domain_name = calloc(255, sizeof(char));
+    query_first.name_server = config->name_server->server;
+    compose_sync_name(query_first.domain_name, &USER1_SYNC, BUDDY_SYNC_INDEX);
+
+    query_second.domain_name = calloc(255, sizeof(char));
+    query_second.name_server = config->name_server->server;
+    compose_sync_name(query_second.domain_name, &USER2_SYNC, BUDDY_SYNC_INDEX);
+
+    if ((config->method(&query_first)) == 0){
+        exec_query(&query_first);
+        prefix_config.my_sync = &USER1_SYNC;
+        prefix_config.buddy_sync = &USER2_SYNC;
+        prefix_config.my_data_prefix = &USER1_PREFIX;
+        prefix_config.buddy_data_prefix = &USER2_PREFIX;
+        printf("I'm first\n");
+    }else if ((config->method(&query_second)) == 0){
+        exec_query(&query_second);
+        prefix_config.my_sync = &USER2_SYNC;
+        prefix_config.buddy_sync = &USER1_SYNC;
+        prefix_config.my_data_prefix = &USER2_PREFIX;
+        prefix_config.buddy_data_prefix = &USER1_PREFIX;
+        printf("I'm second\n");
+    }else{
+        printf("Conversation full\n");
+        exit(EXIT_FAILURE);
+    }
+    MY_SYNC_INDEX++;
+    return;
+}
+
+void set_sync_bit(){
+    /*
+     * Function used in interactive mode to announce other conversation articipant that message theres new message.
+     * TODO:Implement sleep to ensure max bitrate
+     */
+    int result = 1;
+    char *sync_name = calloc(255, sizeof(char));
+    query_t query;
+    while (result == 1){
+        compose_sync_name(sync_name, prefix_config.buddy_sync, BUDDY_SYNC_INDEX);
+        query.domain_name = sync_name;
+        query.name_server = config->name_server->server;
+        result = config->method(&query);
+        BUDDY_SYNC_INDEX++;
+    }
+    printf("*Message sent*\n");
+    exec_query(&query);
+    return;
+}
+
+void wait_for_sync_bit(){
+    /*
+     * Function used in interactive mode to wait until next message is ready to be read.
+     */
+    int result = 0;
+    char *sync_name = calloc(255, sizeof(char));
+    query_t query;
+    while(result == 0){
+        compose_sync_name(sync_name, prefix_config.my_sync, MY_SYNC_INDEX);
+        query.domain_name = sync_name;
+        query.name_server = config->name_server->server;
+        result = config->method(&query);
+        MY_SYNC_INDEX++;
+        exec_query(&query);
+        //printf("\nName: %s, Result: %d\n",query.domain_name, result);
+        //TODO:Make sleep period configurable!
+        sleep(5);
+    }
+    return;
+}
+
+void interactive_sender(){
+    /*
+     * Function intended to be run in separate thread. Used in interactive mode, this function reads contents of stdin.
+     * until it reaches EOF. Data from stdin are passed to stream_to_bits() function via pipe.
+     */
+    struct sigaction sigint_action_struct = {.sa_handler = &sig_handler };
+    char c;
+    char *buffer = calloc(1000, sizeof(char));
+    pthread_t *workers;
+    pthread_t stream = {0};
+
+    /*TODO:Gracefull handling of SIGINT
+    sigaction(SIGINT,&sigint_action_struct, NULL);
+    */
+
+    int bit_pipe[2];
+
+    while (END_INTERACTIVE == 0) {
+        pipe(bit_pipe);
+        workers = create_senders(&bit_pipe[0]);
+        void *stream_args[2] = {STDIN_FILENO, bit_pipe[1]};
+        pthread_create(&stream, NULL, (void *) stream_to_bits, stream_args);
+        printf("Type in your message (Enter + ^D to finish): ");
+        fflush(stdout);
+        pthread_join(stream, NULL);
+        close(bit_pipe[0]);
+        close(bit_pipe[1]);
+        join_threads(workers);
+        set_sync_bit();
+
+        S_LENGTH_INDEX_REL = 0;
+        S_LENGTH_INDEX = S_BIT_INDEX;
+        S_LENGTH_INDEX_STOP = S_LENGTH_INDEX + 31;
+        S_BIT_INDEX = S_LENGTH_INDEX + 32;
+        S_DATA_LENGTH = 0;
+        END_WORKERS = 0;
+    }
+    printf("Exiting\n");
+    return;
+}
+
+void interactive_listener(){
+    /*
+     * Function intended to be run in separate thread. Used in interactive mode, this function waits until
+     * synchronization bit is set. When synchronization bit signals new message, this message is printed to stdout.
+     */
+
+    pthread_t *workers;
+    pthread_t stream = {0};
+    int bit_pipe[2];
+
+
+    while (END_INTERACTIVE == 0) {
+        pipe(bit_pipe);
+        wait_for_sync_bit();
+        get_data_length();
+//        printf("Data length: %d\n",R_DATA_LENGTH);
+        printf("\n*Recieving message*\n");
+        void *stream_args[2] = {STDOUT_FILENO, bit_pipe[0]};
+        pthread_create(&stream,NULL,(void *) bin_to_file, (void *) stream_args);
+        workers = create_retrievers(&bit_pipe[1]);
+        pthread_join(stream, NULL);
+        join_threads(workers);
+        close(bit_pipe[0]);
+        close(bit_pipe[1]);
+
+        R_LENGTH_INDEX = R_BIT_INDEX;
+        R_BIT_INDEX = R_BIT_INDEX + 32;
+        REBUILD_INDEX = R_BIT_INDEX;
+
+        printf("Type in your message (Enter + ^D to finish): ");
+        fflush(stdout);
+    }
+    return;
+}
+
 void compresor(void **args) {
 /*Function calls deflate_data() from compres.h with appropriate arguments.
  *It is meant to be us in thread creation
@@ -620,12 +997,20 @@ int main(int argc, char **argv) {
     pthread_mutexattr_t mutex_attr;
     pthread_mutexattr_init(&mutex_attr);
     pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
-    pthread_mutex_init(&LOCK, &mutex_attr);
+    pthread_mutex_init(&SENDER_LOCK, &mutex_attr);
     int c, option_flags = 0;
-    config = init_conf();;
+    config = init_conf();
     FILE *fp;
-    while ((c = getopt(argc, argv, "tDCm:c:s:r:")) != -1) {
+    while ((c = getopt(argc, argv, "itDCm:c:s:r:")) != -1) {
         switch (c) {
+            case 'i':
+                //interactive mode
+                if (config->method == NULL) {
+                    //If method is not set, use default
+                    config->method = &iscached_time;
+                }
+                option_flags += INTERACTIVE_FLAG;
+                break;
             case 't':
                 //testing option
                 read_conf_file();
@@ -682,6 +1067,21 @@ int main(int argc, char **argv) {
     }
 
     read_conf_file();
+
+    if ((option_flags & INTERACTIVE_FLAG) == INTERACTIVE_FLAG){
+        calibrate();
+        get_sync_target();
+        pthread_t sender = {0};
+        pthread_t listener = {0};
+
+        pthread_create(&sender, NULL, (void*) interactive_sender, NULL);
+        pthread_create(&listener, NULL, (void*) interactive_listener, NULL);
+
+        pthread_join(sender, NULL);
+        printf("Joined sender\n");
+        pthread_join(listener, NULL);
+        exit(EXIT_SUCCESS);
+    }
 
     if ((option_flags & SEND_FLAG) == SEND_FLAG) {
         if (strcmp(config->input_file, "-") == 0) {
