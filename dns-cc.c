@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <signal.h>
+#include "display.h"
 /*
  * 
  */
@@ -25,6 +26,12 @@
 #define READ_FLAG  4
 #define COMPRESS_FLAG  8
 #define INTERACTIVE_FLAG 16
+
+//Statuses used in interactive mode
+char STAT_IDLE[5] = "Idle";
+char STAT_SENDING[16] = "Sending message";
+char STAT_SENT_OK[13] = "Message sent";
+char STAT_RECIEVING[18] = "Recieving message";
 
 /*Domain name prefixes used in interactive mode
  * to separate user data and singalisation*/
@@ -53,7 +60,6 @@ uint32_t MY_SYNC_INDEX = 0;
 /*Global variable used by bin_to_file method to put bits back together
  *in correct order.*/
 unsigned long REBUILD_INDEX = 32;
-
 
 //Structure to hold assigned prefixes in interactive mode
 typedef struct prefix_config_t {
@@ -221,7 +227,7 @@ void bin_to_file(void **args) {
             }
         }
     }
-    //END_WORKERS = 1;
+    close(output_fd);
 }
 
 void sender_thread(int *fd) {
@@ -876,7 +882,8 @@ void set_sync_bit(){
         result = config->method(&query);
         BUDDY_SYNC_INDEX++;
     }
-    printf("*Message sent*\n");
+//    printf("*Message sent*\n");
+    set_status(&STAT_SENT_OK);
     exec_query(&query);
     return;
 }
@@ -918,14 +925,15 @@ void interactive_sender(){
     */
 
     int bit_pipe[2];
+    int display_pipe[2];
 
     while (END_INTERACTIVE == 0) {
         pipe(bit_pipe);
+        pipe(display_pipe);
         workers = create_senders(&bit_pipe[0]);
-        void *stream_args[2] = {STDIN_FILENO, bit_pipe[1]};
+        void *stream_args[2] = {display_pipe[0], bit_pipe[1]};
         pthread_create(&stream, NULL, (void *) stream_to_bits, stream_args);
-        printf("Type in your message (Enter + ^D to finish): ");
-        fflush(stdout);
+        connect_display_input(display_pipe[1]);
         pthread_join(stream, NULL);
         close(bit_pipe[0]);
         close(bit_pipe[1]);
@@ -952,17 +960,20 @@ void interactive_listener(){
     pthread_t *workers;
     pthread_t stream = {0};
     int bit_pipe[2];
-
+    int display_pipe[2];
 
     while (END_INTERACTIVE == 0) {
         pipe(bit_pipe);
+        pipe(display_pipe);
         wait_for_sync_bit();
         get_data_length();
 //        printf("Data length: %d\n",R_DATA_LENGTH);
-        printf("\n*Recieving message*\n");
-        void *stream_args[2] = {STDOUT_FILENO, bit_pipe[0]};
+//        printf("\n*Recieving message*\n");
+        set_status(&STAT_RECIEVING);
+        void *stream_args[2] = {display_pipe[1], bit_pipe[0]};
         pthread_create(&stream,NULL,(void *) bin_to_file, (void *) stream_args);
         workers = create_retrievers(&bit_pipe[1]);
+        connect_display_output(display_pipe[0]);
         pthread_join(stream, NULL);
         join_threads(workers);
         close(bit_pipe[0]);
@@ -971,8 +982,8 @@ void interactive_listener(){
         R_LENGTH_INDEX = R_BIT_INDEX;
         R_BIT_INDEX = R_BIT_INDEX + 32;
         REBUILD_INDEX = R_BIT_INDEX;
-
-        printf("Type in your message (Enter + ^D to finish): ");
+        set_status(&STAT_IDLE);
+//        printf("Type in your message (Enter + ^D to finish): ");
         fflush(stdout);
     }
     return;
@@ -1074,18 +1085,21 @@ int main(int argc, char **argv) {
         pthread_t sender = {0};
         pthread_t listener = {0};
 
+        display_init();
+
         pthread_create(&sender, NULL, (void*) interactive_sender, NULL);
         pthread_create(&listener, NULL, (void*) interactive_listener, NULL);
 
         pthread_join(sender, NULL);
         printf("Joined sender\n");
         pthread_join(listener, NULL);
+        display_destroy();
         exit(EXIT_SUCCESS);
     }
 
     if ((option_flags & SEND_FLAG) == SEND_FLAG) {
         if (strcmp(config->input_file, "-") == 0) {
-            printf("Type in your message (end with ^D):  ");
+//            printf("Type in your message (end with ^D):  ");
             fp = stdin;
         } else {
             fp = fopen(config->input_file, "r");
