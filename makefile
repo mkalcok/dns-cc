@@ -2,8 +2,8 @@ CC=gcc -w
 PREFIX=/usr/bin
 SETTINGS_DIR=/etc/dns-cc
 
-compile: dns-cc.c compress.h nameres.h
-	$(CC) dns-cc.c -g -o dns-cc -lz -lpthread -lcares
+compile: dns-cc.c compress.h nameres.h display.h
+	$(CC) dns-cc.c -g -o dns-cc -lz -lpthread -lcares -lcurses
 
 install: dns-cc
 	cp dns-cc $(PREFIX)
