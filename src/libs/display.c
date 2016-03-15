@@ -1,5 +1,7 @@
 #include <curses.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 //TODO: Implement locks on writing to screens!!!!
 //TODO: Implement scrollback somehow

@@ -1,6 +1,6 @@
 #include <assert.h>
 #include <zlib.h>
-#include <errno.h>
+#include <stdio.h>
 
 #define CHUNK 16384
 #define LEVEL 9

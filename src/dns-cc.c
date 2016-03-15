@@ -10,12 +10,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
-#include "compress.h"
-#include "nameres.h"
+#include "libs/compress.c"
+#include "libs/nameres.c"
 #include <fcntl.h>
 #include <ctype.h>
 #include <signal.h>
-#include "display.h"
+#include "libs/display.c"
+#include <errno.h>
 /*
  * 
  */
@@ -796,6 +797,7 @@ void calibrate() {
  *Number of samples is based on config->precision defined by user
  *
  */
+//    TODO: Create per-server calibration sets instead of globals.
     srand(time(NULL));
     sample_times = init_sample_times();
     unsigned int i = 0;
@@ -1004,14 +1006,142 @@ void compresor(void **args) {
     return;
 }
 
+int reading_mode(int option_flags){
+    FILE *output_fp = fopen(config->output_file, "wb");
+    int output_fd = fileno(output_fp);
+    printf("Retrieving data...\n");
+    calibrate();
+    get_data_length();
+
+    int binary_pipe[2];
+    pipe(binary_pipe);
+
+    int data_pipe[2];
+    pipe(data_pipe);
+
+    pthread_t rebuild_td = {0};
+    pthread_t decompres_td = {0};
+
+    if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
+        void *decompres_args[2] = {output_fd, data_pipe[0]};
+        pthread_create(&decompres_td, NULL, (void *) inflate_data, (void *) decompres_args);
+
+        void *args[2] = {data_pipe[1], binary_pipe[0]};
+        pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
+
+        pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
+
+        pthread_join(rebuild_td, NULL);
+        pthread_join(decompres_td, NULL);
+        join_threads(workers_td);
+
+    } else {
+        int *args[2] = {output_fd, binary_pipe[0]};
+        pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
+
+        pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
+
+        pthread_join(rebuild_td, NULL);
+        join_threads(workers_td);
+
+
+    }
+
+    printf("Done Reading\n");
+    close(output_fd);
+    fclose(output_fp);
+    free_sample_times();
+    free_conf(config);
+    return(EXIT_SUCCESS);
+}
+
+int sending_mode(int option_flags){
+    FILE *fp;
+    if (strcmp(config->input_file, "-") == 0) {
+//            printf("Type in your message (end with ^D):  ");
+        fp = stdin;
+    } else {
+        fp = fopen(config->input_file, "r");
+    }
+
+    if (fp == NULL) {
+        printf("Can't open input file: %s\n", config->input_file);
+        return(EXIT_FAILURE);
+    }
+    printf("Sending Data...\n");
+    int input_fd = fileno(fp);
+    int *byte = calloc(1, sizeof(int));
+    int data_pipe[2];
+    int binary_pipe[2];
+
+    pipe(data_pipe);
+    fcntl(data_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(data_pipe[1], F_SETFL, O_NONBLOCK);
+
+    pipe(binary_pipe);
+    fcntl(data_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(data_pipe[1], F_SETFL, O_NONBLOCK);
+
+
+    pthread_t filestream_td = {0};
+    pthread_t bitstream_td = {0};
+
+    pthread_t *workers_td;
+    workers_td = create_senders(&binary_pipe[0]);
+
+    if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
+        void *compres_args[2] = {data_pipe[1], fp};
+        pthread_create(&filestream_td, NULL, (void *) compresor, (void *) compres_args);
+
+        void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
+        pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
+
+        pthread_join(filestream_td, NULL);
+        pthread_join(bitstream_td, NULL);
+        close(data_pipe[0]);
+    } else {
+        void *stream_args[2] = {input_fd, binary_pipe[1]};
+        pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
+
+        pthread_join(filestream_td, NULL);
+        pthread_join(bitstream_td, NULL);
+        close(data_pipe[0]);
+    }
+
+    join_threads(workers_td);
+
+    fclose(fp);
+    printf("Data sent successfuly\n");
+    free(byte);
+    free_conf(config);
+    return(EXIT_SUCCESS);
+}
+
+int interactive_mode(){
+    calibrate();
+    get_sync_target();
+    pthread_t sender = {0};
+    pthread_t listener = {0};
+
+    display_init();
+
+    pthread_create(&sender, NULL, (void*) interactive_sender, NULL);
+    pthread_create(&listener, NULL, (void*) interactive_listener, NULL);
+
+    pthread_join(sender, NULL);
+    printf("Joined sender\n");
+    pthread_join(listener, NULL);
+    display_destroy();
+    return(EXIT_SUCCESS);
+}
+
 int main(int argc, char **argv) {
     pthread_mutexattr_t mutex_attr;
     pthread_mutexattr_init(&mutex_attr);
     pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
     pthread_mutex_init(&SENDER_LOCK, &mutex_attr);
-    int c, option_flags = 0;
+    int c, option_flags = 0, exit_status = EXIT_FAILURE;
     config = init_conf();
-    FILE *fp;
     while ((c = getopt(argc, argv, "itDCm:c:s:r:")) != -1) {
         switch (c) {
             case 'i':
@@ -1080,136 +1210,18 @@ int main(int argc, char **argv) {
     read_conf_file();
 
     if ((option_flags & INTERACTIVE_FLAG) == INTERACTIVE_FLAG){
-        calibrate();
-        get_sync_target();
-        pthread_t sender = {0};
-        pthread_t listener = {0};
-
-        display_init();
-
-        pthread_create(&sender, NULL, (void*) interactive_sender, NULL);
-        pthread_create(&listener, NULL, (void*) interactive_listener, NULL);
-
-        pthread_join(sender, NULL);
-        printf("Joined sender\n");
-        pthread_join(listener, NULL);
-        display_destroy();
-        exit(EXIT_SUCCESS);
+        exit_status = interactive_mode();
+    }else if ((option_flags & SEND_FLAG) == SEND_FLAG) {
+        exit_status = sending_mode(option_flags);
+    }else if ((option_flags & READ_FLAG) == READ_FLAG) {
+        exit_status = reading_mode(option_flags);
+    }else{
+        help();
     }
-
-    if ((option_flags & SEND_FLAG) == SEND_FLAG) {
-        if (strcmp(config->input_file, "-") == 0) {
-//            printf("Type in your message (end with ^D):  ");
-            fp = stdin;
-        } else {
-            fp = fopen(config->input_file, "r");
-        }
-
-        if (fp == NULL) {
-            printf("Can't open input file: %s\n", config->input_file);
-            return (EXIT_FAILURE);
-        }
-        printf("Sending Data...\n");
-        int input_fd = fileno(fp);
-        int *byte = calloc(1, sizeof(int));
-        int data_pipe[2];
-        int binary_pipe[2];
-
-        pipe(data_pipe);
-        fcntl(data_pipe[0], F_SETFL, O_NONBLOCK);
-        fcntl(data_pipe[1], F_SETFL, O_NONBLOCK);
-
-        pipe(binary_pipe);
-        fcntl(data_pipe[0], F_SETFL, O_NONBLOCK);
-        fcntl(data_pipe[1], F_SETFL, O_NONBLOCK);
-
-
-        pthread_t filestream_td = {0};
-        pthread_t bitstream_td = {0};
-
-        pthread_t *workers_td;
-        workers_td = create_senders(&binary_pipe[0]);
-
-        if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
-            void *compres_args[2] = {data_pipe[1], fp};
-            pthread_create(&filestream_td, NULL, (void *) compresor, (void *) compres_args);
-
-            void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
-            pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
-
-            pthread_join(filestream_td, NULL);
-            pthread_join(bitstream_td, NULL);
-            close(data_pipe[0]);
-        } else {
-            void *stream_args[2] = {input_fd, binary_pipe[1]};
-            pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
-
-            pthread_join(filestream_td, NULL);
-            pthread_join(bitstream_td, NULL);
-            close(data_pipe[0]);
-        }
-
-        join_threads(workers_td);
-
-        fclose(fp);
-        printf("Data sent successfuly\n");
-        free(byte);
-        free_conf(config);
-        return (EXIT_SUCCESS);
-    }
-    if ((option_flags & READ_FLAG) == READ_FLAG) {
-        FILE *output_fp = fopen(config->output_file, "wb");
-        int output_fd = fileno(output_fp);
-        printf("Retrieving data...\n");
-        calibrate();
-        get_data_length();
-
-        int binary_pipe[2];
-        pipe(binary_pipe);
-
-        int data_pipe[2];
-        pipe(data_pipe);
-
-        pthread_t rebuild_td = {0};
-        pthread_t decompres_td = {0};
-
-        if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
-            void *decompres_args[2] = {output_fd, data_pipe[0]};
-            pthread_create(&decompres_td, NULL, (void *) inflate_data, (void *) decompres_args);
-
-            void *args[2] = {data_pipe[1], binary_pipe[0]};
-            pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
-
-            pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
-
-            pthread_join(rebuild_td, NULL);
-            pthread_join(decompres_td, NULL);
-            join_threads(workers_td);
-
-        } else {
-            int *args[2] = {output_fd, binary_pipe[0]};
-            pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
-
-            pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
-
-            pthread_join(rebuild_td, NULL);
-            join_threads(workers_td);
-
-
-        }
-
-        printf("Done Reading\n");
-        close(output_fd);
-        fclose(output_fp);
-        free_sample_times();
-        free_conf(config);
-        return (EXIT_SUCCESS);
-    }
-    help();
     /*printf("input_file %s\n", config->input_file);
     printf("name_server %s\n", config->name_server);
     printf("name_base %s\n", config->name_base);
     printf("key %s\n", config->key);*/
     free_conf(config);
-    return (EXIT_SUCCESS);
+    return (exit_status);
 }

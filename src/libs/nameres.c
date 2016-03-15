@@ -2,6 +2,8 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <ares.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 
 typedef struct query_t {
