@@ -10,12 +10,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
-#include "libs/compress.c"
-#include "libs/nameres.c"
+#include "libs/compress.h"
+#include "libs/nameres.h"
 #include <fcntl.h>
 #include <ctype.h>
 #include <signal.h>
-#include "libs/display.c"
+#include "libs/display.h"
 #include <errno.h>
 /*
  * 
@@ -94,7 +94,7 @@ typedef struct conf {
     int precision;
     int max_speed;
 
-    int (*method)(query_t *);
+    int (*method)(struct query_t *);
 } conf;
 
 static struct conf *config;
@@ -222,7 +222,7 @@ void bin_to_file(void **args) {
             if (bin_index == -1) {
                 write(output_fd, &byte, 1);
                 //printf("Byte: %c\n",byte);
-                //printf("%c",byte);
+//                printf("%c\n",byte);
                 bin_index = 7;
                 byte = 0;
             }
@@ -249,7 +249,7 @@ void sender_thread(int *fd) {
     size_t prefix_len;
     int bitmask;
     ssize_t check;
-    query_t query;
+    struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
     if(!prefix_config.buddy_data_prefix){
         prefix = malloc(1);
@@ -297,6 +297,7 @@ void sender_thread(int *fd) {
     }
 
     while (S_LENGTH_INDEX <= S_LENGTH_INDEX_STOP){
+        printf("writing header %d.\n", S_DATA_LENGTH);
         if ((pthread_mutex_trylock(&SENDER_LOCK)) == 0){
             bitmask = 1 << S_LENGTH_INDEX_REL;
             if(bitmask == (bitmask & S_DATA_LENGTH)){
@@ -307,6 +308,7 @@ void sender_thread(int *fd) {
                 S_LENGTH_INDEX_REL++;
                 CURRENT_SERVER = CURRENT_SERVER->next;
                 pthread_mutex_unlock(&SENDER_LOCK);
+                printf("%s\n",query.domain_name);
                 exec_query(&query);
             }else{
                 S_LENGTH_INDEX++;
@@ -380,7 +382,7 @@ void retriever_thread(int *fd) {
     char *prefix;
     size_t prefix_len;
     unsigned long my_bit;
-    query_t query;
+    struct query_t query;
     query.domain_name = calloc(255,sizeof(char));
 
     if(!prefix_config.my_data_prefix){
@@ -472,6 +474,7 @@ void stream_to_bits(void **args) {
         if (check == -1 && errno == EAGAIN) { continue; }
         else if (check < 1) { break; }
         mask = 128;
+        printf("%c\n",byte);
         for (i = 0; i < 8; i++) {
             if (byte & mask) {
                 write(output_pipe, "1", 1);
@@ -488,7 +491,7 @@ void stream_to_bits(void **args) {
     //printf("CLOSING\n");
 }
 
-int iscached_iter(query_t *query) {
+int iscached_iter(struct query_t *query) {
     /*
      * This function executes non-recursive DNS query to determine whether bit was previously cached or not.
      * Arguments:
@@ -499,7 +502,7 @@ int iscached_iter(query_t *query) {
     return (exec_query_no_recurse(query));
 }
 
-int iscached_time(query_t *query) {
+int iscached_time(struct query_t *query) {
     /* This function executes DNS query and employs Weighted k-NN algorithm
      * (see http://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm#k-NN_regression)
      * to determine whether domain name was previously cached or not.
@@ -632,7 +635,7 @@ void test() {
     char name_server[20] = "208.67.222.222";
     char domain_name[20] = "cccc.stuba.sk";
     int result;
-    query_t query = {.domain_name = &domain_name, .name_server = &name_server};
+    struct query_t query = {.domain_name = &domain_name, .name_server = &name_server};
     result = exec_query_no_recurse(&query);
     printf("Result %d\n", result);
     //exec_query(&query);
@@ -760,7 +763,7 @@ void get_data_length() {
      *
      * NOTE: Final length includes also first 4 bytes used as length header.
      */
-    query_t query;
+    struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
     int result;
     int index_stop = R_LENGTH_INDEX + 32;
@@ -783,11 +786,15 @@ void get_data_length() {
         compose_name(query.domain_name, R_LENGTH_INDEX);
         query.name_server = CURRENT_SERVER->server;
         result = config->method(&query);
+        //printf("Position %s, result %d\n",query.domain_name, result);
         R_DATA_LENGTH = (R_DATA_LENGTH | (result << relative_index));
         relative_index++;
     }
+//    printf("Data leghtn %d\n",R_DATA_LENGTH);
     R_DATA_LENGTH += 32;
+//    printf("Data leghtn %d\n",R_DATA_LENGTH);
     R_DATA_END += R_DATA_LENGTH;
+//    printf("%d\n",R_DATA_LENGTH);
     CURRENT_SERVER = config->name_server;
     free(query.domain_name);
 }
@@ -801,7 +808,7 @@ void calibrate() {
     srand(time(NULL));
     sample_times = init_sample_times();
     unsigned int i = 0;
-    query_t query;
+    struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
     struct server_list *servers = config->name_server;
     for (i = 0; i < config->precision; i++) {
@@ -837,8 +844,8 @@ void get_sync_target(){
      * After successfully finding slot, prefix_config structure is filled with proper values for two way interactive
      * conversation.
      */
-    query_t query_first;
-    query_t query_second;
+    struct query_t query_first;
+    struct query_t query_second;
     query_first.domain_name = calloc(255, sizeof(char));
     query_first.name_server = config->name_server->server;
     compose_sync_name(query_first.domain_name, &USER1_SYNC, BUDDY_SYNC_INDEX);
@@ -876,7 +883,7 @@ void set_sync_bit(){
      */
     int result = 1;
     char *sync_name = calloc(255, sizeof(char));
-    query_t query;
+    struct query_t query;
     while (result == 1){
         compose_sync_name(sync_name, prefix_config.buddy_sync, BUDDY_SYNC_INDEX);
         query.domain_name = sync_name;
@@ -896,7 +903,7 @@ void wait_for_sync_bit(){
      */
     int result = 0;
     char *sync_name = calloc(255, sizeof(char));
-    query_t query;
+    struct query_t query;
     while(result == 0){
         compose_sync_name(sync_name, prefix_config.my_sync, MY_SYNC_INDEX);
         query.domain_name = sync_name;
@@ -1087,6 +1094,7 @@ int sending_mode(int option_flags){
     pthread_t bitstream_td = {0};
 
     pthread_t *workers_td;
+//    printf("creating threads\n");
     workers_td = create_senders(&binary_pipe[0]);
 
     if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
@@ -1103,7 +1111,7 @@ int sending_mode(int option_flags){
         void *stream_args[2] = {input_fd, binary_pipe[1]};
         pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
 
-        pthread_join(filestream_td, NULL);
+//        pthread_join(filestream_td, NULL);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
     }

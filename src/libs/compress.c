@@ -1,10 +1,6 @@
+#include "compress.h"
 #include <assert.h>
 #include <zlib.h>
-#include <stdio.h>
-
-#define CHUNK 16384
-#define LEVEL 9
-
 
 int deflate_data(FILE *source, int fd_dest) {
     int ret, flush;

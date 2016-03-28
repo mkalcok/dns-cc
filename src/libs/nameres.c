@@ -1,15 +1,9 @@
+#import "nameres.h"
 #include <time.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include <ares.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-
-typedef struct query_t {
-    char *domain_name;
-    char *name_server;
-} query_t;
 
 void gethostbyname_cb(void *arg, int status, int timeouts, struct hostent *host) {
     if (status == ARES_SUCCESS) {
@@ -55,7 +49,7 @@ void main_loop(ares_channel channel) {
     }
 }
 
-int exec_query(query_t *query) {
+int exec_query(struct query_t *query) {
     unsigned long timer[2] = {0, 0};
     struct ares_options options;
     struct timespec tv;
@@ -82,7 +76,7 @@ int exec_query(query_t *query) {
     return delay;
 }
 
-int exec_query_no_recurse(query_t *query) {
+int exec_query_no_recurse(struct query_t *query) {
     struct ares_options options;
     int res, response;
     struct in_addr *server_addr = malloc(sizeof(struct in_addr));

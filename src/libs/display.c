@@ -1,4 +1,4 @@
-#include <curses.h>
+#include "display.h"
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -6,21 +6,11 @@
 //TODO: Implement locks on writing to screens!!!!
 //TODO: Implement scrollback somehow
 
-//ncurses screens
-WINDOW *HISTORY_SCREEN_BORDER;
-WINDOW *EDIT_SCREEN_BORDER;
-
-WINDOW *HISTORY_SCREEN;
-WINDOW *EDIT_SCREEN;
-
-WINDOW *STATUS_SCREEN;
-
 int EDIT_LINES = 5;
 int STATUS_LINES = 1;
 
 char *MY_MESSAGE;
 size_t MY_MESSAGE_MAX = 500;
-size_t MY_MESSAGE_SIZE;
 
 void msg_buffer_destroy() {
     free(MY_MESSAGE);
