@@ -81,6 +81,7 @@ static struct prefix_config_t prefix_config = {
 typedef struct server_list {
     char *server;
     struct server_list *next;
+    bool root;
 } server_list;
 
 //Global configuration variables
@@ -150,6 +151,13 @@ void sig_handler(int sig_num){
      */
     END_INTERACTIVE = 1;
 }
+
+void set_root_server(){
+    while(!CURRENT_SERVER->root){
+        CURRENT_SERVER = CURRENT_SERVER->next;
+    }
+}
+
 void compose_name(char *output, unsigned long seq) {
 /*Function creates  domain name to be queried.
  *
@@ -297,8 +305,9 @@ void sender_thread(int *fd) {
     }
 
     while (S_LENGTH_INDEX <= S_LENGTH_INDEX_STOP){
-        printf("writing header %d.\n", S_DATA_LENGTH);
+//        printf("writing header %d to %s \n", S_DATA_LENGTH, CURRENT_SERVER->server);
         if ((pthread_mutex_trylock(&SENDER_LOCK)) == 0){
+            set_root_server();
             bitmask = 1 << S_LENGTH_INDEX_REL;
             if(bitmask == (bitmask & S_DATA_LENGTH)){
                 strncpy(query.domain_name, prefix, prefix_len);
@@ -306,14 +315,14 @@ void sender_thread(int *fd) {
                 query.name_server = CURRENT_SERVER->server;
                 S_LENGTH_INDEX++;
                 S_LENGTH_INDEX_REL++;
-                CURRENT_SERVER = CURRENT_SERVER->next;
+//                CURRENT_SERVER = CURRENT_SERVER->next;
                 pthread_mutex_unlock(&SENDER_LOCK);
-                printf("%s\n",query.domain_name);
+//                printf("%s\n",query.domain_name);
                 exec_query(&query);
             }else{
                 S_LENGTH_INDEX++;
                 S_LENGTH_INDEX_REL++;
-                CURRENT_SERVER = CURRENT_SERVER->next;
+//                CURRENT_SERVER = CURRENT_SERVER->next;
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
@@ -474,7 +483,7 @@ void stream_to_bits(void **args) {
         if (check == -1 && errno == EAGAIN) { continue; }
         else if (check < 1) { break; }
         mask = 128;
-        printf("%c\n",byte);
+//        printf("%c\n",byte);
         for (i = 0; i < 8; i++) {
             if (byte & mask) {
                 write(output_pipe, "1", 1);
@@ -656,6 +665,7 @@ void set_servers(char *servers) {
     first = calloc(1, sizeof(struct server_list));
     first->server = calloc(1, strlen(token));
     strncpy(first->server, token, strlen(token));
+    first->root = TRUE;
     first->next = first;
     config->name_server = first;
     prev = first;
@@ -665,6 +675,7 @@ void set_servers(char *servers) {
         new = calloc(1, sizeof(server_list));
         new->server = calloc(1, strlen(token));
         strncpy(new->server, token, strlen(token));
+        new->root = FALSE;
         new->next = first;
         prev->next = new;
         prev = new;
@@ -781,6 +792,7 @@ void get_data_length() {
     }
 
     R_DATA_LENGTH = 0;
+    set_root_server();
     for (R_LENGTH_INDEX; R_LENGTH_INDEX < index_stop; R_LENGTH_INDEX++) {
         strncpy(query.domain_name, prefix, prefix_len);
         compose_name(query.domain_name, R_LENGTH_INDEX);
