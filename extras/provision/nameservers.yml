@@ -1,0 +1,54 @@
+---
+- hosts: authority-ns
+  tasks:
+  - name: Install DNS Server
+    become: yes
+    become_method: sudo
+    apt:
+      state=latest
+      name={{ item }}
+    with_items:
+      - dnsmasq
+
+  - name: Upload dnsmasq config
+    become: yes
+    become_method: sudo
+    copy:
+      src=./misc/dnsmasq-auth.conf
+      dest=/etc/dnsmasq.conf
+    notify:
+      - restart dnsmasq
+  handlers:
+    - name: restart dnsmasq
+      become: yes
+      service: 
+        name=dnsmasq
+        state=restarted
+
+
+- hosts: cache-ns
+  tasks:
+  - name: Install Named Server
+    become: yes
+    become_method: sudo
+    apt:
+      state=latest
+      name={{ item }}
+    with_items:
+      - bind9
+  - name: Upload bind config
+    become: yes
+    become_method: sudo
+    copy:
+      src=./misc/named-cache.conf.options
+      dest=/etc/bind/named.conf.options
+    notify:
+      - restart bind
+
+  handlers:
+    - name: restart bind
+      become: yes
+      service: 
+        name=bind9 
+        state=restarted
+

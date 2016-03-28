@@ -1,0 +1,18 @@
+acl "trusted" {
+    192.168.50.0/24;
+};
+
+options {
+    directory "/var/cache/bind";
+    recursion yes;
+    allow-query {trusted;};
+    allow-recursion {trusted;};
+
+    max-cache-size 100m;
+    max-ncache-ttl 3600;
+
+    forwarders {
+        192.168.60.100;
+    };
+    forward only;
+};
