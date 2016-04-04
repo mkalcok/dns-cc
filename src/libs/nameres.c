@@ -5,6 +5,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef __linux__
+
+#include <time.h>
+
+#endif
+
+#ifdef __APPLE__
+
+#include <mach/mach.h>
+#include <mach/clock.h>
+#include <sys/select.h>
+
+#endif
+
 void gethostbyname_cb(void *arg, int status, int timeouts, struct hostent *host) {
     if (status == ARES_SUCCESS) {
         printf("%s\n", inet_ntoa(*((struct in_addr *) host->h_addr)));
@@ -15,8 +29,19 @@ void gethostbyname_cb(void *arg, int status, int timeouts, struct hostent *host)
 }
 
 void time_query_cb(unsigned long *timer_slot, int status, int timeouts, unsigned char *abuf, int alen) {
+#ifdef __linux__
     struct timespec tv;
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+#endif
+
+#ifdef __APPLE__
+    mach_timespec_t tv;
+    clock_serv_t cclock;
+    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+    clock_get_time(cclock, &tv);
+    mach_port_deallocate(mach_task_self(), cclock);
+#endif
+
     *timer_slot = (unsigned long) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 }
 
@@ -52,7 +77,7 @@ void main_loop(ares_channel channel) {
 int exec_query(struct query_t *query) {
     unsigned long timer[2] = {0, 0};
     struct ares_options options;
-    struct timespec tv;
+//    struct timespec tv;
     int res, delay;
     struct in_addr *server_addr = malloc(sizeof(struct in_addr));
     inet_aton(query->name_server, server_addr);
@@ -67,7 +92,20 @@ int exec_query(struct query_t *query) {
     //main_loop(channel);
     //TODO:Make it atomic!!!!
     ares_query(channel, query->domain_name, 1, 1, (ares_callback) time_query_cb, &timer[1]);
+
+#ifdef __linux__
+    struct timespec tv;
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+#endif
+
+#ifdef __APPLE__
+    mach_timespec_t tv;
+    clock_serv_t cclock;
+    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+    clock_get_time(cclock, &tv);
+    mach_port_deallocate(mach_task_self(), cclock);
+#endif
+
     timer[0] = (unsigned long) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
     main_loop(channel);
     delay = (int) (timer[1] - timer[0]);
