@@ -10,12 +10,13 @@
 FIND_PATH(CARES_INCLUDE_DIR ares.h
         /usr/local/include
         /usr/include
+        /opt/local/include
         )
 
 SET(CARES_NAMES ${CARES_NAMES} cares)
 FIND_LIBRARY(CARES_LIBRARY
         NAMES ${CARES_NAMES}
-        PATHS /usr/lib /usr/local/lib
+        PATHS /usr/lib /usr/local/lib /opt/local/lib
         )
 
 IF (CARES_LIBRARY AND CARES_INCLUDE_DIR)
