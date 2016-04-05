@@ -96,4 +96,12 @@ Vagrant.configure(2) do |config|
       "authority-ns" => ["authority"]
     }
   end
+
+  config.vm.provision "reset-dns", type: "ansible" do |ansible|
+    ansible.playbook = "./extras/provision/reset-dns.yml"
+    ansible.groups = {
+      "cache-ns" => ["cache1", "cache2"],
+      "authority-ns" => ["authority"]
+    }
+  end
 end

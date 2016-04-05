@@ -1,0 +1,15 @@
+---
+- hosts: authority-ns
+  tasks:
+  - name: Restart dnsmasq
+    become: yes
+    become_method: sudo
+    command: service dnsmasq restart
+
+- hosts: cache-ns
+  tasks:
+  - name: Restart Bind9
+    become: yes
+    become_method: sudo
+    command: service bind9 restart
+
