@@ -169,7 +169,7 @@ void compose_name(char *output, unsigned long seq) {
  *
  * TODO: Merge with compose_sync_name() because data bits now use prefixes too
  */
-    char charseq[10];
+    char charseq[11];
     sprintf(charseq, "%lu", seq);
     strcat(output, config->key);
     strcat(output, charseq);
