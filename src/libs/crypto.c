@@ -44,7 +44,7 @@ int fill_buffer(int fd, char *buffer, int buff_size){
 	int read_len;
 	char str_term = '\0';
 
-	for(buff_len; buff_len <= buff_size; buff_len++){
+	for(buff_len; buff_len < buff_size; buff_len++){
 		read_len = read(fd, &c, 1);
 		if(read_len == 0){
 			buffer[buff_len] = '\0';
@@ -54,7 +54,7 @@ int fill_buffer(int fd, char *buffer, int buff_size){
 	}
 
 	//eliminate last iteration of for lopp
-	return buff_len - 1;
+	return buff_len;
 }
 
 void decrypt_stream(int input_fd, int output_fd, char *passphrase){
