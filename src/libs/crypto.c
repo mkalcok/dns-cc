@@ -53,7 +53,8 @@ int fill_buffer(int fd, char *buffer, int buff_size){
 		buffer[buff_len] = c;
 	}
 
-	return buff_len;
+	//eliminate last iteration of for lopp
+	return buff_len - 1;
 }
 
 void decrypt_stream(int input_fd, int output_fd, char *passphrase){
