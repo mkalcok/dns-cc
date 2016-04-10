@@ -16,6 +16,7 @@
 #include <ctype.h>
 #include <signal.h>
 #include "libs/display.h"
+#include "libs/crypto.h"
 #include <errno.h>
 /*
  * 
@@ -27,6 +28,7 @@
 #define READ_FLAG  4
 #define COMPRESS_FLAG  8
 #define INTERACTIVE_FLAG 16
+#define ENCRYPTION_FLAG 32
 
 //Statuses used in interactive mode
 char STAT_IDLE[5] = "Idle";
@@ -91,7 +93,7 @@ typedef struct conf {
     char *output_file;
     char *name_base;
     server_list *name_server;
-    char *key;
+    char *passphrase;
     int precision;
     int max_speed;
 
@@ -171,7 +173,7 @@ void compose_name(char *output, unsigned long seq) {
  */
     char charseq[11];
     sprintf(charseq, "%lu", seq);
-    strcat(output, config->key);
+    strcat(output, config->passphrase);
     strcat(output, charseq);
     strcat(output, config->name_base);
     return;
@@ -598,7 +600,7 @@ void free_conf(struct conf *p) {
     free(p->output_file);
     free(p->name_base);
     free_servers(p->name_server);
-    free(p->key);
+    free(p->passphrase);
     free(p);
     return;
 }
@@ -699,8 +701,8 @@ void set_conf(char *var, char *value) {
         config->name_base = set_member(value, value_length);
         return;
     }
-    if (strcasecmp(var, "key") == 0) {
-        config->key = set_member(value, value_length);
+    if (strcasecmp(var, "passphrase") == 0) {
+        config->passphrase = set_member(value, value_length);
         return;
     }
     if (strcasecmp(var, "precision") == 0) {
@@ -1025,6 +1027,36 @@ void compresor(void **args) {
     return;
 }
 
+void encryptor(void **args) {
+/*Function calls encrypt_stream() from crypto.h with appropriate arguments.
+ *It is meant to be us in thread creation
+ *
+ * Arguments:
+ *	arg[0]	- FILE pointer to opened input file
+ *	arg[1]	- File descriptor to write end of pipe
+ */
+    int fd_in = fileno((FILE *) args[1]);
+    int fd_out = (int) args[0];
+    encrypt_stream(fd_in, fd_out, config->passphrase);
+    close(fd_out);
+    return;
+}
+
+void decryptor(void **args) {
+/*Function calls decrypt_stream() from crypto.h with appropriate arguments.
+ *It is meant to be us in thread creation
+ *
+ * Arguments:
+ *	arg[0]	- FILE pointer to opened input file
+ *	arg[1]	- File descriptor to write end of pipe
+ */
+    int fd_in = (int) args[1];
+    int fd_out = (int) args[0];
+    decrypt_stream(fd_in, fd_out, config->passphrase);
+    close(fd_out);
+    return;
+}
+
 int reading_mode(int option_flags){
     FILE *output_fp = fopen(config->output_file, "wb");
     int output_fd = fileno(output_fp);
@@ -1037,7 +1069,6 @@ int reading_mode(int option_flags){
 
     int data_pipe[2];
     pipe(data_pipe);
-
     pthread_t rebuild_td = {0};
     pthread_t decompres_td = {0};
 
@@ -1053,7 +1084,23 @@ int reading_mode(int option_flags){
         pthread_join(rebuild_td, NULL);
         pthread_join(decompres_td, NULL);
         join_threads(workers_td);
+    }
 
+    else if ((option_flags & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
+       void *args[2] = {data_pipe[1], binary_pipe[0]};
+        pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
+
+        pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
+
+        void *decrypt_args[2] = {output_fd, data_pipe[0]};
+        pthread_create(&decompres_td, NULL, (void *) decryptor, (void *) decrypt_args);
+
+ 
+
+        pthread_join(rebuild_td, NULL);
+        pthread_join(decompres_td, NULL);
+        join_threads(workers_td);
+ 
     } else {
         int *args[2] = {output_fd, binary_pipe[0]};
         pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
@@ -1119,6 +1166,16 @@ int sending_mode(int option_flags){
         pthread_join(filestream_td, NULL);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
+    } else if ((option_flags & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
+        void *encrypt_args[2] = {data_pipe[1], fp};
+        pthread_create(&filestream_td, NULL, (void *) encryptor, (void *) encrypt_args);
+
+        void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
+        pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
+
+        pthread_join(filestream_td, NULL);
+        pthread_join(bitstream_td, NULL);
+        close(data_pipe[0]);
     } else {
         void *stream_args[2] = {input_fd, binary_pipe[1]};
         pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
@@ -1162,7 +1219,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&SENDER_LOCK, &mutex_attr);
     int c, option_flags = 0, exit_status = EXIT_FAILURE;
     config = init_conf();
-    while ((c = getopt(argc, argv, "itDCm:c:s:r:")) != -1) {
+    while ((c = getopt(argc, argv, "iteDCm:c:s:r:")) != -1) {
         switch (c) {
             case 'i':
                 //interactive mode
@@ -1187,7 +1244,10 @@ int main(int argc, char **argv) {
                 //Are we gonna (de)compress?
                 option_flags += COMPRESS_FLAG;
                 break;
-
+            case 'e':
+                //Encryption used
+                option_flags += ENCRYPTION_FLAG;
+                break;
             case 's':
                 //program is to send data. If source file is -, open stdin
                 config->input_file = set_member(optarg, strlen(optarg));

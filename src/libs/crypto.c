@@ -17,14 +17,16 @@ void handleErrors(void) {
 void extract_salt(char *salt, int input_fd){
 	const char salt_const[9] = "Salted__";
 	char salt_header[17];
-	char * p_salt_header = salt_header;
+	char *p_salt_header = salt_header;
 	int read_len;
-	read_len = read(input_fd, p_salt_header, 16);
-	if(read_len != 16){
-		printf("Failed to read input stream for decryption.\n");
-		exit(1);
-	}
-
+    int i;
+    for (i=0; i < 16; i++){
+	    read_len = read(input_fd, &salt_header[i], 1);
+        if (read_len != 1){
+            printf("Error reading salt: %s\n", strerror(errno));
+            exit(1);
+        }
+    }
 	if(strncmp(p_salt_header, salt_const, 8)){
 		// File was not salted
 		// TODO: handle pushing back those 16 retireved bytes
@@ -37,7 +39,6 @@ void extract_salt(char *salt, int input_fd){
 
 
 int fill_buffer(int fd, char *buffer, int buff_size){
-	printf("buff size %d\n", buff_size);
 	int buff_len = 0;
 	char c;
 	int read_len;
