@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <openssl/sha.h>
 
 void handleErrors(void) {
 	printf("Error!\n");
@@ -55,6 +56,28 @@ int fill_buffer(int fd, char *buffer, int buff_size){
 
 	//eliminate last iteration of for lopp
 	return buff_len;
+}
+
+void get_checksum(int input_fd, unsigned char *md){
+    int buffer_len = 128;
+    char buffer[buffer_len];
+    char *p_buffer = buffer;
+    int buffer_index;
+
+    SHA_CTX ctx;
+    if(!SHA1_Init(&ctx))
+        exit(1);
+
+    do{
+        printf("loop\n");
+        buffer_index = fill_buffer(input_fd, p_buffer, buffer_len);
+        if (1 != SHA1_Update(&ctx, (unsigned char*)p_buffer, buffer_index))
+            handleErrors();
+    }while(buffer_index == buffer_len);
+
+
+    if(!SHA1_Final(md, &ctx))
+        exit(1);
 }
 
 void decrypt_stream(int input_fd, int output_fd, char *passphrase){
