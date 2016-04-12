@@ -17,6 +17,7 @@
 #include <signal.h>
 #include "libs/display.h"
 #include "libs/crypto.h"
+#include "libs/fec.h"
 #include <errno.h>
 /*
  * 
@@ -29,6 +30,7 @@
 #define COMPRESS_FLAG  8
 #define INTERACTIVE_FLAG 16
 #define ENCRYPTION_FLAG 32
+#define FEC_FLAG 64
 
 //Statuses used in interactive mode
 char STAT_IDLE[5] = "Idle";
@@ -198,6 +200,50 @@ void compose_sync_name(char *output, char *sync_target, unsigned long seq) {
 }
 
 
+void hamming74_bin_to_file(void **args) {
+    int output_fd = (int)args[0];
+    int input_fd = (int)args[1];
+    int bit_index = 0;
+    unsigned char hamming_buffer[14];
+    unsigned char *p_bot_hamming_buffer = hamming_buffer;
+    unsigned char *p_top_hamming_buffer = &hamming_buffer[7];
+    unsigned char byte_buffer[8];
+    unsigned char *p_bot_byte_buffer = byte_buffer;
+    unsigned char *p_top_byte_buffer = &byte_buffer[4];
+    ssize_t check = 0;
+    char byte = 0;
+    char bit;
+    int i;
+    printf("Decoding..\n");
+
+    while (REBUILD_INDEX < R_DATA_END) {
+        check = read(input_fd, &bit, 1);
+        if (check > 0) {
+            REBUILD_INDEX++;
+            if (strncmp(&bit, "1", 1) == 0) {
+                hamming_buffer[bit_index] = 1;
+            } else {
+                hamming_buffer[bit_index] = 0;
+            }
+            if (bit_index == 13) {
+                byte = 0;
+                bit_index = -1;
+                hamming74_decode_block(p_top_hamming_buffer, p_top_byte_buffer);
+                hamming74_decode_block(p_bot_hamming_buffer, p_bot_byte_buffer);
+                for(i=0; i < 8; i++ ){
+                    byte = byte << 1;
+                    byte |= byte_buffer[i];
+                }
+ 
+                write(output_fd, &byte, 1);
+                //printf("Byte: %c\n",byte);
+//                printf("%c\n",byte);
+            }
+            bit_index++;
+        }
+    }
+    close(output_fd);
+}
 void bin_to_file(void **args) {
     /*
      * Function used to rebuild recieved bits back into bytes in correct order.
@@ -1101,6 +1147,14 @@ int reading_mode(int option_flags){
         pthread_join(decompres_td, NULL);
         join_threads(workers_td);
  
+    } else if ((option_flags & FEC_FLAG) == FEC_FLAG){
+        int *args[2] = {output_fd, binary_pipe[0]};
+        pthread_create(&rebuild_td, NULL, (void *) hamming74_bin_to_file, (int *) args);
+
+        pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
+
+        pthread_join(rebuild_td, NULL);
+        join_threads(workers_td);
     } else {
         int *args[2] = {output_fd, binary_pipe[0]};
         pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
@@ -1109,8 +1163,6 @@ int reading_mode(int option_flags){
 
         pthread_join(rebuild_td, NULL);
         join_threads(workers_td);
-
-
     }
 
     printf("Done Reading\n");
@@ -1176,6 +1228,14 @@ int sending_mode(int option_flags){
         pthread_join(filestream_td, NULL);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
+    }else if ((option_flags & FEC_FLAG) == FEC_FLAG){
+        int *stream_args[2] = {input_fd, binary_pipe[1]};
+        pthread_create(&bitstream_td, NULL, (void *) hamming74_encode_stream, (int *) stream_args);
+
+//        pthread_join(filestream_td, NULL);
+        pthread_join(bitstream_td, NULL);
+        close(data_pipe[0]);
+       
     } else {
         void *stream_args[2] = {input_fd, binary_pipe[1]};
         pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
@@ -1219,7 +1279,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&SENDER_LOCK, &mutex_attr);
     int c, option_flags = 0, exit_status = EXIT_FAILURE;
     config = init_conf();
-    while ((c = getopt(argc, argv, "iteDCm:c:s:r:")) != -1) {
+    while ((c = getopt(argc, argv, "fiteDCm:c:s:r:")) != -1) {
         switch (c) {
             case 'i':
                 //interactive mode
@@ -1247,6 +1307,9 @@ int main(int argc, char **argv) {
             case 'e':
                 //Encryption used
                 option_flags += ENCRYPTION_FLAG;
+                break;
+            case 'f':
+                option_flags += FEC_FLAG;
                 break;
             case 's':
                 //program is to send data. If source file is -, open stdin

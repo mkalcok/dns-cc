@@ -1,4 +1,3 @@
-/* OpenSSL headers */
 #include "fec.h"
 #include <string.h>
 #include <unistd.h>
@@ -75,7 +74,9 @@ void hamming74_encode_block(char in_char, char *out_buff){
 
 }
 
-void hamming74_decode_stream(int in_fd, int out_fd){
+void hamming74_decode_stream(int **args){
+    int in_fd = args[0];
+    int out_fd = args[1];
     unsigned char hamming_buffer[14];
     unsigned char *p_bot_hamming_buffer = hamming_buffer;
     unsigned char *p_top_hamming_buffer = &hamming_buffer[7];
@@ -112,9 +113,12 @@ void hamming74_decode_stream(int in_fd, int out_fd){
         }
         bit_index ++;
     }
+    close(out_fd);
 }
 
-void hamming74_encode_stream(int in_fd, int out_fd){
+void hamming74_encode_stream(int **args){
+    int in_fd = (int) args[0];
+    int out_fd = (int) args[1];
     unsigned char bottom_mask = 15;
     unsigned char first_half;
     unsigned char second_half;
@@ -155,4 +159,5 @@ void hamming74_encode_stream(int in_fd, int out_fd){
     }
  
     }while(read_len == 1);
+    close(out_fd);
 }
