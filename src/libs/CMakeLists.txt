@@ -17,3 +17,5 @@ find_package(OpenSSL REQUIRED)
 find_package(CRYPTO)
 add_library(crypto crypto.c)
 target_link_libraries(crypto ${OPENSSL_LIBRARIES} ${CRYPTO_LIBRARIES})
+
+add_library(fec fec.c)
