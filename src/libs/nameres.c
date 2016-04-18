@@ -58,6 +58,27 @@ void norecurse_query_cb(int *response, int status, int timeouts, unsigned char *
 
 }
 
+void ttl_query_cb(int *response, int status, int timeouts, unsigned char *abuf, int alen) {
+    struct hostent *p_host = gethostent();
+    struct hostent *pp_host = &p_host;
+    struct ares_addrttl  ttls;
+    int n_ttls=1;
+    int res;
+    if (status == ARES_ENODATA || status == ARES_ESERVFAIL) {
+        res = ares_parse_a_reply(abuf, alen,  pp_host, &ttls, &n_ttls);
+        *response = ttls.ttl;
+    } else if (status == ARES_SUCCESS || status == ARES_ENOTFOUND) {
+        res = ares_parse_a_reply(abuf, alen, pp_host, &ttls, &n_ttls);
+        *response = ttls.ttl;
+    } else {
+        //TODO:Temporary solution if other error occures
+        *response = -1;
+        
+    }
+
+}
+
+
 void main_loop(ares_channel channel) {
     int nfds, count;
     fd_set readers, writers;
@@ -133,3 +154,23 @@ int exec_query_no_recurse(struct query_t *query) {
     free(server_addr);
     return response;
 }
+
+int exec_query_ttl(struct query_t *query) {
+    struct ares_options options;
+    int res, response;
+    struct in_addr *server_addr = malloc(sizeof(struct in_addr));
+    inet_aton(query->name_server, server_addr);
+    options.servers = server_addr;
+    options.nservers = 1;
+    ares_channel channel;
+    if ((res = ares_init_options(&channel, &options, (ARES_OPT_SERVERS | ARES_OPT_FLAGS))) != ARES_SUCCESS) {
+        printf("ares failed: %d\n", res);
+        return 1;
+    }
+    ares_query(channel, query->domain_name, 1, 1, (ares_callback) ttl_query_cb, &response);
+    main_loop(channel);
+    ares_destroy(channel);
+    free(server_addr);
+    return response;
+}
+

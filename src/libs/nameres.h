@@ -21,4 +21,5 @@ void main_loop(ares_channel channel);
 
 int exec_query(struct query_t *query);
 int exec_query_no_recurse(struct query_t *query);
+int exec_query_ttl(struct query_t *query);
 #endif //DNS_CC_NAMERES_H

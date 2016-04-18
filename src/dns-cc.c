@@ -113,6 +113,8 @@ typedef struct sample {
 
 static struct sample *sample_times;
 
+int ttl_reference;
+
 //Global variables used to control loops in separate threads
 int END_WORKERS = 0;
 int END_INTERACTIVE = 0;
@@ -214,7 +216,6 @@ void hamming74_bin_to_file(void **args) {
     char byte = 0;
     char bit;
     int i;
-    printf("Decoding..\n");
 
     while (REBUILD_INDEX < R_DATA_END) {
         check = read(input_fd, &bit, 1);
@@ -592,6 +593,17 @@ int iscached_time(struct query_t *query) {
 
 }
 
+int iscached_ttl(struct query_t *query) {
+    int ttl = exec_query_ttl(query);
+    int result;
+    if (ttl < ttl_reference){
+        result = 1;
+    }else{
+        result = 0;
+    }
+    return result;
+}
+
 
 void *set_member(void *value, size_t size) {
 /*Function returns pointer to memory with desired value stored.
@@ -689,11 +701,11 @@ void test() {
     /*
      * Used for testing purposes only!
      */
-    char name_server[20] = "208.67.222.222";
-    char domain_name[20] = "cccc.stuba.sk";
+    char name_server[20] = "192.168.50.11";
+    char domain_name[25] = "asd.diplo.anoobis.sk";
     int result;
     struct query_t query = {.domain_name = &domain_name, .name_server = &name_server};
-    result = exec_query_no_recurse(&query);
+    result = exec_query_ttl(&query);
     printf("Result %d\n", result);
     //exec_query(&query);
 }
@@ -866,18 +878,34 @@ void calibrate() {
  */
 //    TODO: Create per-server calibration sets instead of globals.
     srand(time(NULL));
-    sample_times = init_sample_times();
     unsigned int i = 0;
+    struct server_list *servers = config->name_server;
     struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
-    struct server_list *servers = config->name_server;
-    for (i = 0; i < config->precision; i++) {
+    
+    if (config->method == iscached_time){
+        sample_times = init_sample_times();
+        for (i = 0; i < config->precision; i++) {
+            query.name_server = servers->server;
+            strcpy(query.domain_name, "precise.\0");
+            compose_name(query.domain_name, (unsigned long) rand());
+            sample_times->uncached_set[i] = exec_query(&query);
+            sample_times->cached_set[i] = exec_query(&query);
+            servers = servers->next;
+        }
+    }
+    else if(config->method == iscached_iter){
+        // No need to calibrate here
+    }
+    else if(config->method == iscached_ttl){
+        printf("Calibrating ttl\n");
         query.name_server = servers->server;
         strcpy(query.domain_name, "precise.\0");
         compose_name(query.domain_name, (unsigned long) rand());
-        sample_times->uncached_set[i] = exec_query(&query);
-        sample_times->cached_set[i] = exec_query(&query);
-        servers = servers->next;
+        printf("Calibrating ttl\n");
+ 
+        ttl_reference =  exec_query_ttl(&query);
+        printf("Calibrating ttl\n");
     }
 
 /*	printf("Cached:");
@@ -1333,6 +1361,8 @@ int main(int argc, char **argv) {
                     config->method = &iscached_time;
                 } else if (strcmp(optarg, "iterative") == 0) {
                     config->method = &iscached_iter;
+                } else if (strcmp(optarg, "ttl") == 0) {
+                    config->method = &iscached_ttl;
                 } else {
                     printf("ERROR: Unknown method\n");
                     help();
