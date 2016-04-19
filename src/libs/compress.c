@@ -31,6 +31,7 @@ int deflate_data(FILE *source, int fd_dest) {
         /* run deflate() on input until output buffer not full, finish
            compression if all of source has been read in */
         do {
+            strm.avail_out = CHUNK;
             strm.next_out =  out;
             ret = deflate(&strm, flush);    /* no bad return value */
             assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
