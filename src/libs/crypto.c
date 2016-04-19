@@ -80,7 +80,7 @@ void get_checksum(int input_fd, unsigned char *md){
         exit(1);
 }
 
-void decrypt_stream(int input_fd, int output_fd, char *passphrase){
+int decrypt_stream(int input_fd, int output_fd, char *passphrase){
     /* Initialise the library */
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
@@ -120,6 +120,7 @@ void decrypt_stream(int input_fd, int output_fd, char *passphrase){
 	char input_buffer[input_buffer_len];
 	char *p_input_buffer = input_buffer;
 	int buffer_index = 0;
+    int total_bits = 0;
 
     if (!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
 
@@ -131,22 +132,24 @@ void decrypt_stream(int input_fd, int output_fd, char *passphrase){
 		if (1 != EVP_DecryptUpdate(ctx, p_plaintext, &len, p_input_buffer, buffer_index))
 			handleErrors();
 		plaintext_len = len;
+        total_bits += plaintext_len * 8;
 		write(output_fd, p_plaintext, plaintext_len);
 	}while(buffer_index == input_buffer_len);
 
     if (1 != EVP_DecryptFinal_ex(ctx, p_plaintext + len, &len)) handleErrors();
 	write(output_fd, p_plaintext + plaintext_len, len);
     plaintext_len += len;
+    total_bits += len * 8;
 
     EVP_CIPHER_CTX_free(ctx);
     EVP_cleanup();
     ERR_free_strings();
 
 
-
+    return total_bits;
 }
 
-void encrypt_stream(int input_fd, int output_fd, char *passphrase){
+int encrypt_stream(int input_fd, int output_fd, char *passphrase){
     /* Initialise the library */
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
@@ -187,6 +190,7 @@ void encrypt_stream(int input_fd, int output_fd, char *passphrase){
 	char * p_input_buffer = input_buffer;
 	int buffer_index;
     int len;
+    int total_bits;
 
 	unsigned char *plaintext;
 	unsigned char ciphertext[512] = {};
@@ -206,6 +210,7 @@ void encrypt_stream(int input_fd, int output_fd, char *passphrase){
 	// Buffer Resonable amount of data for encryption (aligned to 16)
 	do{
 		buffer_index = fill_buffer(input_fd, p_input_buffer, input_buffer_len);
+        total_bits += (buffer_index * 8);
 		if (1 != EVP_EncryptUpdate(ctx, ciphertext_p, &len, p_input_buffer, buffer_index))
 			handleErrors();
 		ciphertext_len = len;
@@ -222,7 +227,7 @@ void encrypt_stream(int input_fd, int output_fd, char *passphrase){
     EVP_CIPHER_CTX_free(ctx);
     EVP_cleanup();
     ERR_free_strings();
-
+    return total_bits;
 }
 
 /*int main(void) {

@@ -19,6 +19,7 @@
 #include "libs/crypto.h"
 #include "libs/fec.h"
 #include <errno.h>
+#include <time.h>
 /*
  * 
  */
@@ -65,6 +66,12 @@ uint32_t MY_SYNC_INDEX = 0;
 /*Global variable used by bin_to_file method to put bits back together
  *in correct order.*/
 unsigned long REBUILD_INDEX = 32;
+
+/*Verbosity level
+* 0 - None (Default)
+* 1 - Debug
+*/
+unsigned char VERBOSITY = 0;
 
 //Structure to hold assigned prefixes in interactive mode
 typedef struct prefix_config_t {
@@ -127,6 +134,17 @@ pthread_mutex_t RETRIEVER_LOCK;
  *of next bit*/
 struct server_list *CURRENT_SERVER;
 
+//Global statistics
+typedef struct statistic {
+    unsigned long total_bits_transmited;
+    unsigned long total_data_bits;
+    float start_time;
+    float end_time;
+    unsigned int errors;
+} statistic;
+
+statistic global_stat = {0, 0, 0, 0, 0};
+
 int _pow(int base, int exp) {
 /*
  * Recursive function, returns value of base^exp
@@ -162,6 +180,32 @@ void set_root_server(){
     while(!CURRENT_SERVER->root){
         CURRENT_SERVER = CURRENT_SERVER->next;
     }
+}
+
+void summary(int option_flags){
+    char time_unit[3] = "ms\0";
+    float overhead = (float) ( (float)global_stat.total_bits_transmited / (float) ((float) global_stat.total_data_bits / (float) 100));
+    float total_time_ms = (int) (global_stat.end_time - global_stat.start_time);
+
+    if (total_time_ms > 1000){
+        total_time_ms = (float) total_time_ms / 1000;
+        strncpy(&time_unit, "s\0", 2);
+    }
+
+    printf("\n##############################\n");
+    printf("### Transmission statistics:\n");
+    printf("Total Transmited: %d b\n"
+            "Pure data: %d b\n"
+            "Transport ratio: %.2f %\n", global_stat.total_bits_transmited, global_stat.total_data_bits, overhead);
+
+    if (((option_flags & READ_FLAG) == READ_FLAG) && ((option_flags & FEC_FLAG) == FEC_FLAG) ){
+        printf("Errors fixed: %d\n",  global_stat.errors);
+
+    }
+
+    printf("Total time: %.2f %s",total_time_ms, time_unit);
+    printf("\n##############################\n");
+
 }
 
 void compose_name(char *output, unsigned long seq) {
@@ -202,7 +246,7 @@ void compose_sync_name(char *output, char *sync_target, unsigned long seq) {
 }
 
 
-void hamming74_bin_to_file(void **args) {
+int hamming74_bin_to_file(void **args) {
     int output_fd = (int)args[0];
     int input_fd = (int)args[1];
     int bit_index = 0;
@@ -216,6 +260,7 @@ void hamming74_bin_to_file(void **args) {
     char byte = 0;
     char bit;
     int i;
+    int total_bits;
 
     while (REBUILD_INDEX < R_DATA_END) {
         check = read(input_fd, &bit, 1);
@@ -229,14 +274,15 @@ void hamming74_bin_to_file(void **args) {
             if (bit_index == 13) {
                 byte = 0;
                 bit_index = -1;
-                hamming74_decode_block(p_top_hamming_buffer, p_top_byte_buffer);
-                hamming74_decode_block(p_bot_hamming_buffer, p_bot_byte_buffer);
+                global_stat.errors += hamming74_decode_block(p_top_hamming_buffer, p_top_byte_buffer);
+                global_stat.errors += hamming74_decode_block(p_bot_hamming_buffer, p_bot_byte_buffer);
                 for(i=0; i < 8; i++ ){
                     byte = byte << 1;
                     byte |= byte_buffer[i];
                 }
  
                 write(output_fd, &byte, 1);
+                total_bits += 8;
                 //printf("Byte: %c\n",byte);
 //                printf("%c\n",byte);
             }
@@ -244,8 +290,9 @@ void hamming74_bin_to_file(void **args) {
         }
     }
     close(output_fd);
+    return total_bits;
 }
-void bin_to_file(void **args) {
+int bin_to_file(void **args) {
     /*
      * Function used to rebuild recieved bits back into bytes in correct order.
      * It is responsible for incrementing REBUILD_INDEX that is used by retriever_thread()
@@ -261,6 +308,7 @@ void bin_to_file(void **args) {
     int output_fd = (int)args[0];
     int input_fd = (int)args[1];
     int bin_index = 7;
+    int total_bits = 0;
     ssize_t check = 0;
     int byte = 0;
     char bit;
@@ -269,6 +317,7 @@ void bin_to_file(void **args) {
         check = read(input_fd, &bit, 1);
         if (check > 0) {
             REBUILD_INDEX++;
+            total_bits ++;
             //printf("Bit: %c\n",bit);
             if (strncmp(&bit, "1", 1) == 0) {
                 byte = (byte | (1 << bin_index));
@@ -286,6 +335,7 @@ void bin_to_file(void **args) {
         }
     }
     close(output_fd);
+    return total_bits;
 }
 
 void sender_thread(int *fd) {
@@ -342,6 +392,7 @@ void sender_thread(int *fd) {
                     CURRENT_SERVER = CURRENT_SERVER->next;
                     pthread_mutex_unlock(&SENDER_LOCK);
                 }
+                global_stat.total_bits_transmited ++;
             } else if (check == -1 && errno == EAGAIN) {
                 pthread_mutex_unlock(&SENDER_LOCK);
             } else {
@@ -477,6 +528,7 @@ void retriever_thread(int *fd) {
             while (1) {
                 if (REBUILD_INDEX == my_bit) {
                     write(*fd, &c, 1);
+                    global_stat.total_bits_transmited ++;
                     break;
                 }
                 if (END_WORKERS) { break; }
@@ -512,7 +564,7 @@ pthread_t *create_retrievers(int *fd) {
 }
 
 
-void stream_to_bits(void **args) {
+int stream_to_bits(void **args) {
     /*
      * Function used to convert bytes from input_pipe into bits and write their representation (either "0" or "1")
      * int output_pipe. On the other end of output_pipe there is sender_thread() function that takse care of writing
@@ -526,6 +578,7 @@ void stream_to_bits(void **args) {
     int output_pipe = (int) args[1];
     ssize_t check = 0;
     int i = 0, mask;
+    int total_read = 0;
     char byte;
     while (1) {
         check = read(input_pipe, &byte, 1);
@@ -541,12 +594,14 @@ void stream_to_bits(void **args) {
                 write(output_pipe, "0", 1);
                 //printf("0");
             }
+            total_read ++;
             mask = mask >> 1;
         }
         //printf("\n");
     }
     close(output_pipe);
     //printf("CLOSING\n");
+    return total_read;
 }
 
 int iscached_iter(struct query_t *query) {
@@ -1086,7 +1141,7 @@ void interactive_listener(){
     return;
 }
 
-void compresor(void **args) {
+int compresor(void **args) {
 /*Function calls deflate_data() from compres.h with appropriate arguments.
  *It is meant to be us in thread creation
  *
@@ -1096,12 +1151,13 @@ void compresor(void **args) {
  */
     FILE *fp = (FILE *) args[1];
     int fd = (int) args[0];
-    deflate_data(fp, fd);
+    int total_bits;
+    total_bits = deflate_data(fp, fd);
     close(fd);
-    return;
+    return total_bits;
 }
 
-void encryptor(void **args) {
+int encryptor(void **args) {
 /*Function calls encrypt_stream() from crypto.h with appropriate arguments.
  *It is meant to be us in thread creation
  *
@@ -1111,12 +1167,13 @@ void encryptor(void **args) {
  */
     int fd_in = fileno((FILE *) args[1]);
     int fd_out = (int) args[0];
-    encrypt_stream(fd_in, fd_out, config->passphrase);
+    int input_bits;
+    input_bits = encrypt_stream(fd_in, fd_out, config->passphrase);
     close(fd_out);
-    return;
+    return input_bits;
 }
 
-void decryptor(void **args) {
+int decryptor(void **args) {
 /*Function calls decrypt_stream() from crypto.h with appropriate arguments.
  *It is meant to be us in thread creation
  *
@@ -1126,9 +1183,10 @@ void decryptor(void **args) {
  */
     int fd_in = (int) args[1];
     int fd_out = (int) args[0];
-    decrypt_stream(fd_in, fd_out, config->passphrase);
-    close(fd_out);
-    return;
+    int total_bits;
+    total_bits = decrypt_stream(fd_in, fd_out, config->passphrase);
+    //close(fd_out);
+    return total_bits;
 }
 
 int reading_mode(int option_flags){
@@ -1146,9 +1204,15 @@ int reading_mode(int option_flags){
     pthread_t rebuild_td = {0};
     pthread_t decompres_td = {0};
 
+    // Start time measurment
+    struct timespec tv;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+    global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
+
+
     if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
         void *decompres_args[2] = {output_fd, data_pipe[0]};
-        pthread_create(&decompres_td, NULL, (void *) inflate_data, (void *) decompres_args);
+        pthread_create(&decompres_td, NULL, (int) inflate_data, (void *) decompres_args);
 
         void *args[2] = {data_pipe[1], binary_pipe[0]};
         pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
@@ -1156,13 +1220,13 @@ int reading_mode(int option_flags){
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 
         pthread_join(rebuild_td, NULL);
-        pthread_join(decompres_td, NULL);
+        pthread_join(decompres_td, &global_stat.total_data_bits);
         join_threads(workers_td);
     }
 
     else if ((option_flags & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
        void *args[2] = {data_pipe[1], binary_pipe[0]};
-        pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
+        pthread_create(&rebuild_td, NULL, (int) bin_to_file, (void *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 
@@ -1172,31 +1236,35 @@ int reading_mode(int option_flags){
  
 
         pthread_join(rebuild_td, NULL);
-        pthread_join(decompres_td, NULL);
+        pthread_join(decompres_td, &global_stat.total_data_bits);
         join_threads(workers_td);
  
     } else if ((option_flags & FEC_FLAG) == FEC_FLAG){
         int *args[2] = {output_fd, binary_pipe[0]};
-        pthread_create(&rebuild_td, NULL, (void *) hamming74_bin_to_file, (int *) args);
+        pthread_create(&rebuild_td, NULL, (int) hamming74_bin_to_file, (int *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 
-        pthread_join(rebuild_td, NULL);
+        pthread_join(rebuild_td, &global_stat.total_data_bits);
         join_threads(workers_td);
     } else {
         int *args[2] = {output_fd, binary_pipe[0]};
-        pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
+        pthread_create(&rebuild_td, NULL, (int) bin_to_file, (void *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 
-        pthread_join(rebuild_td, NULL);
+        pthread_join(rebuild_td, &global_stat.total_data_bits);
         join_threads(workers_td);
     }
+
+    // End time measurment
+    clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+    global_stat.end_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
     printf("Done Reading\n");
     close(output_fd);
     fclose(output_fp);
-    free_sample_times();
+    //free_sample_times();
     free_conf(config);
     return(EXIT_SUCCESS);
 }
@@ -1235,45 +1303,55 @@ int sending_mode(int option_flags){
     pthread_t *workers_td;
 //    printf("creating threads\n");
     workers_td = create_senders(&binary_pipe[0]);
+    
+    // Start time measurment
+    struct timespec tv;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+    global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
     if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
         void *compres_args[2] = {data_pipe[1], fp};
-        pthread_create(&filestream_td, NULL, (void *) compresor, (void *) compres_args);
+        pthread_create(&filestream_td, NULL, (int) compresor, (void *) compres_args);
 
         void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
         pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
 
-        pthread_join(filestream_td, NULL);
+        pthread_join(filestream_td, &global_stat.total_data_bits);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
     } else if ((option_flags & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
         void *encrypt_args[2] = {data_pipe[1], fp};
-        pthread_create(&filestream_td, NULL, (void *) encryptor, (void *) encrypt_args);
+        pthread_create(&filestream_td, NULL, (int) encryptor, (void *) encrypt_args);
 
         void *stream_args[2] = {data_pipe[0], binary_pipe[1]};
-        pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
+        pthread_create(&bitstream_td, NULL, (int) stream_to_bits, (void *) stream_args);
 
-        pthread_join(filestream_td, NULL);
+        pthread_join(filestream_td, &global_stat.total_data_bits);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
     }else if ((option_flags & FEC_FLAG) == FEC_FLAG){
         int *stream_args[2] = {input_fd, binary_pipe[1]};
-        pthread_create(&bitstream_td, NULL, (void *) hamming74_encode_stream, (int *) stream_args);
+        pthread_create(&bitstream_td, NULL, (int) hamming74_encode_stream, (int *) stream_args);
 
 //        pthread_join(filestream_td, NULL);
-        pthread_join(bitstream_td, NULL);
+        pthread_join(bitstream_td, &global_stat.total_data_bits);
         close(data_pipe[0]);
        
     } else {
         void *stream_args[2] = {input_fd, binary_pipe[1]};
-        pthread_create(&bitstream_td, NULL, (void *) stream_to_bits, (void *) stream_args);
+        pthread_create(&bitstream_td, NULL, (int) stream_to_bits, (void *) stream_args);
 
 //        pthread_join(filestream_td, NULL);
-        pthread_join(bitstream_td, NULL);
+        pthread_join(bitstream_td, &global_stat.total_data_bits);
         close(data_pipe[0]);
     }
 
     join_threads(workers_td);
+
+    // End time measurment
+    clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+    global_stat.end_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
+
 
     fclose(fp);
     printf("Data sent successfuly\n");
@@ -1307,7 +1385,7 @@ int main(int argc, char **argv) {
     pthread_mutex_init(&SENDER_LOCK, &mutex_attr);
     int c, option_flags = 0, exit_status = EXIT_FAILURE;
     config = init_conf();
-    while ((c = getopt(argc, argv, "fiteDCm:c:s:r:")) != -1) {
+    while ((c = getopt(argc, argv, "vfiteDCm:c:s:r:")) != -1) {
         switch (c) {
             case 'i':
                 //interactive mode
@@ -1369,6 +1447,9 @@ int main(int argc, char **argv) {
                     return (EXIT_FAILURE);
                 }
                 break;
+            case 'v':
+                VERBOSITY = 1;
+                break;
             default:
                 help();
                 return (EXIT_FAILURE);
@@ -1395,6 +1476,10 @@ int main(int argc, char **argv) {
     printf("name_server %s\n", config->name_server);
     printf("name_base %s\n", config->name_base);
     printf("key %s\n", config->key);*/
-    free_conf(config);
+    //free_conf(config);
+    printf("yoo\n");
+    if(VERBOSITY){
+        summary(option_flags);
+    }
     return (exit_status);
 }

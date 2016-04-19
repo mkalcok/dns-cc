@@ -17,19 +17,21 @@ char hammington_verficator[3][7] = {{1, 0, 1, 0, 1, 0, 1},
                                     {0, 1, 1, 0, 0, 1, 1},
                                     {0, 0, 0, 1, 1, 1, 1}};
 
-void fix(char *data, char *syndrome){
-    if (!syndrome[0] && !syndrome[1] && !syndrome[2]){return;};
+int fix(char *data, char *syndrome){
+    if (!syndrome[0] && !syndrome[1] && !syndrome[2]){return 0 ;};
     int err_index;
+    int fixed_bits = 0;
     for (err_index = 0; err_index<7; err_index++){
         if ((syndrome[0] == hammington_verficator[0][err_index]) && (syndrome[1] == hammington_verficator[1][err_index]) && (syndrome[2] == hammington_verficator[2][err_index])){
             
             printf("Warning: error found in %d bit, fixing it\n", err_index+1);
             data[err_index] = !data[err_index];
-            return;
+            fixed_bits ++;
+            return fixed_bits;
         };
     }
     printf("Error could not be fixed\n");
-    return;
+    return fixed_bits;
 }
 
 void strip_parity(char *in_buff, char *out_buff){
@@ -39,10 +41,11 @@ void strip_parity(char *in_buff, char *out_buff){
     out_buff[3] = in_buff[6];
 }
 
-void hamming74_decode_block(char *in_buffer, char *out_buffer){
+int hamming74_decode_block(char *in_buffer, char *out_buffer){
     int i,j,k;
     unsigned char syndrome[3];
     unsigned char m_product;
+    int fixed_bits = 0;
 
     for(j=0; j<3; j++){
         m_product = 0;
@@ -51,8 +54,9 @@ void hamming74_decode_block(char *in_buffer, char *out_buffer){
         }
         syndrome[j] = m_product % 2;
     }
-        fix(in_buffer, &syndrome);
+    fixed_bits = fix(in_buffer, &syndrome);
     strip_parity(in_buffer, out_buffer);
+    return fixed_bits;
 }
 void hamming74_encode_block(char in_char, char *out_buff){
     unsigned char data_bits[4];
@@ -116,9 +120,10 @@ void hamming74_decode_stream(int **args){
     close(out_fd);
 }
 
-void hamming74_encode_stream(int **args){
+int hamming74_encode_stream(int **args){
     int in_fd = (int) args[0];
     int out_fd = (int) args[1];
+    int total_bits;
     unsigned char bottom_mask = 15;
     unsigned char first_half;
     unsigned char second_half;
@@ -139,6 +144,7 @@ void hamming74_encode_stream(int **args){
         strerror(errno);
         break;
     }
+    total_bits += 8;
     first_half = in_byte >> 4;
     second_half = in_byte & bottom_mask;
     
@@ -160,4 +166,5 @@ void hamming74_encode_stream(int **args){
  
     }while(read_len == 1);
     close(out_fd);
+    return total_bits;
 }

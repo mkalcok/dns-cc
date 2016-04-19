@@ -4,6 +4,7 @@
 
 int deflate_data(FILE *source, int fd_dest) {
     int ret, flush;
+    int total_bits = 0;
     unsigned have;
     z_stream strm;
     ssize_t check;
@@ -26,6 +27,7 @@ int deflate_data(FILE *source, int fd_dest) {
             (void) deflateEnd(&strm);
             return Z_ERRNO;
         }
+        total_bits = (strm.avail_in * 8);
         flush = feof(source) ? Z_FINISH : Z_NO_FLUSH;
         strm.next_in = in;
         /* run deflate() on input until output buffer not full, finish
@@ -55,13 +57,14 @@ int deflate_data(FILE *source, int fd_dest) {
     assert(ret == Z_STREAM_END);        /* stream will be complete */
     /* clean up and return */
     (void) deflateEnd(&strm);
-    return Z_OK;
+    return total_bits;
 }
 
 int inflate_data(void **args) {
     int dest_fd = (int) args[0];
     int source_fd = (int) args[1];
     int ret;
+    int total_bits = 0;
     unsigned have;
     z_stream strm;
     unsigned char in[CHUNK];
@@ -114,6 +117,7 @@ int inflate_data(void **args) {
                 (void) inflateEnd(&strm);
                 return Z_ERRNO;
             }
+            total_bits += have * 8;
         } while (strm.avail_out == 0);
 
         /* done when inflate() says it's done */
@@ -121,6 +125,7 @@ int inflate_data(void **args) {
 
     /* clean up and return */
     (void) inflateEnd(&strm);
-    return ret == Z_STREAM_END ? Z_OK : Z_DATA_ERROR;
+    //return ret == Z_STREAM_END ? Z_OK : Z_DATA_ERROR;
+    return total_bits;
 }
 
