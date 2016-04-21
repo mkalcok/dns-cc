@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <openssl/sha.h>
 
+int _SHA_DIGEST_LEN = SHA_DIGEST_LENGTH;
+
 void handleErrors(void) {
 	printf("Error!\n");
     ERR_print_errors_fp(stderr);
@@ -58,7 +60,20 @@ int fill_buffer(int fd, char *buffer, int buff_size){
 	return buff_len;
 }
 
-void get_checksum(int input_fd, unsigned char *md){
+void sha1_block_sum(unsigned char *buf, int buf_len, unsigned char *sum){
+
+    SHA_CTX ctx;
+    if(!SHA1_Init(&ctx))
+        exit(1);
+
+    if (1 != SHA1_Update(&ctx, buf, buf_len))
+        handleErrors();
+
+    if(!SHA1_Final(sum, &ctx))
+        exit(1);
+}
+
+void sha1_stream_sum(int input_fd, unsigned char *md){
     int buffer_len = 128;
     char buffer[buffer_len];
     char *p_buffer = buffer;

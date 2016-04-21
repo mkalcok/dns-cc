@@ -219,12 +219,23 @@ void compose_name(char *output, unsigned long seq) {
  *
  * TODO: Merge with compose_sync_name() because data bits now use prefixes too
  */
-    char charseq[11];
+    int plaintext_len = strlen(config->passphrase);
+    int i;
+    unsigned char hex_char[3];
+    unsigned char *p_plaintext = calloc(sizeof(char), plaintext_len + 11);
+    unsigned char hash_bin[_SHA_DIGEST_LEN];
+    unsigned char charseq[11];
     sprintf(charseq, "%lu", seq);
-    strcat(output, config->passphrase);
-    strcat(output, charseq);
+    strncpy(p_plaintext, config->passphrase, plaintext_len);
+    strcat(p_plaintext, charseq);
+    plaintext_len = strlen(p_plaintext);
+    sha1_block_sum(p_plaintext, plaintext_len, hash_bin);
+
+    for(i = 0; i < _SHA_DIGEST_LEN; i++){
+        sprintf(hex_char, "%x", hash_bin[i]);
+        strcat(output, hex_char);
+    }
     strcat(output, config->name_base);
-    return;
 }
 
 void compose_sync_name(char *output, char *sync_target, unsigned long seq) {
@@ -412,12 +423,12 @@ void sender_thread(int *fd) {
             if(bitmask == (bitmask & S_DATA_LENGTH)){
                 strncpy(query.domain_name, prefix, prefix_len);
                 compose_name(query.domain_name, S_LENGTH_INDEX);
+                //printf("Writing header %d %s\n",S_LENGTH_INDEX, query.domain_name);
                 query.name_server = CURRENT_SERVER->server;
                 S_LENGTH_INDEX++;
                 S_LENGTH_INDEX_REL++;
 //                CURRENT_SERVER = CURRENT_SERVER->next;
                 pthread_mutex_unlock(&SENDER_LOCK);
-//                printf("%s\n",query.domain_name);
                 exec_query(&query);
             }else{
                 S_LENGTH_INDEX++;
@@ -519,8 +530,8 @@ void retriever_thread(int *fd) {
             pthread_mutex_unlock(&RETRIEVER_LOCK);
             strncpy(query.domain_name, prefix, prefix_len);
             compose_name(query.domain_name, my_bit);
-            //printf("[%u] name: %s\n",pthread_self(), query.domain_name);
-            //printf("[%u] server: %s\n",pthread_self(), query.name_server);
+            // printf("[%u] name: %s\n",pthread_self(), query.domain_name);
+            // printf("[%u] server: %s\n",pthread_self(), query.name_server);
 
             result = config->method(&query);
             //printf("[%u] name: %s Result: %d\n",pthread_self(), query.domain_name, result);
@@ -756,12 +767,27 @@ void test() {
     /*
      * Used for testing purposes only!
      */
+   
+    unsigned char c[3];
     char name_server[20] = "192.168.50.11";
-    char domain_name[25] = "asd.diplo.anoobis.sk";
-    int result;
-    struct query_t query = {.domain_name = &domain_name, .name_server = &name_server};
-    result = exec_query_ttl(&query);
-    printf("Result %d\n", result);
+    char domain_name[25] = "asd24.diplo.anoobis.sk";
+    char *p_domain = domain_name;
+    int d_len = strlen(&domain_name);
+    unsigned char hex_sum[(_SHA_DIGEST_LEN * 2)];
+    unsigned char *p_hex_sum = hex_sum;
+    unsigned char sum[_SHA_DIGEST_LEN];
+    unsigned char *p_sum = sum;
+    compose_name(p_hex_sum, 5);
+    printf("%s\n",p_hex_sum);
+    return;
+    int i;
+    sha1_block_sum(p_domain, d_len, p_sum);
+    printf("Result:\n");
+    for (i = 0; i < _SHA_DIGEST_LEN; i++){
+        sprintf(c, "%x", p_sum[i]);
+        strcat(hex_sum, c);
+    }
+    printf("%s\n",hex_sum);
     //exec_query(&query);
 }
 
@@ -1477,7 +1503,6 @@ int main(int argc, char **argv) {
     printf("name_base %s\n", config->name_base);
     printf("key %s\n", config->key);*/
     //free_conf(config);
-    printf("yoo\n");
     if(VERBOSITY){
         summary(option_flags);
     }
