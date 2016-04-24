@@ -18,6 +18,7 @@
 #include "libs/display.h"
 #include "libs/crypto.h"
 #include "libs/fec.h"
+#include "libs/crc.h"
 #include <errno.h>
 #include <time.h>
 /*
@@ -33,6 +34,17 @@
 #define ENCRYPTION_FLAG 32
 #define FEC_FLAG 64
 
+//Define header parameters
+#define HEADER_LEN_SIZE 31
+#define HEADER_COM_FLAG 1
+#define HEADER_ENC_FLAG 1
+#define HEADER_FEC_FLAG 1
+#define HEADER_CRC_FLAG 1
+#define HEADER_LEN_CRC 2
+
+//Program options
+uint32_t GLOBAL_OPTIONS = 0;
+
 //Statuses used in interactive mode
 char STAT_IDLE[5] = "Idle";
 char STAT_SENDING[16] = "Sending message";
@@ -47,17 +59,19 @@ char USER1_PREFIX[6] = "1user";
 char USER2_PREFIX[6] = "2user";
 
 //Global variables used by S_ender in interactive mode
-uint32_t S_BIT_INDEX = 32;
-uint32_t S_DATA_LENGTH;
-uint32_t S_LENGTH_INDEX = 0;
-uint32_t S_LENGTH_INDEX_REL = 0;
-uint32_t S_LENGTH_INDEX_STOP = 31;
+uint32_t S_BIT_INDEX = 64;
+uint64_t S_DATA_LENGTH;
+uint64_t S_HEADER;
+uint32_t S_HEADER_INDEX = 0;
+uint32_t S_HEADER_INDEX_REL = 0;
+uint32_t S_HEADER_INDEX_STOP = 63;
+uint16_t S_HEADER_CRC;
 
 //Global variables used by R_eceiver in interactive mode
-uint32_t R_BIT_INDEX = 32;
-uint32_t R_DATA_LENGTH;
+uint32_t R_BIT_INDEX = 64;
+uint64_t R_DATA_LENGTH;
 uint32_t R_DATA_END = 0;
-uint32_t R_LENGTH_INDEX = 0;
+uint32_t R_HEADER_INDEX = 0;
 
 //Global variables to hold index of last used synchronization bit
 uint32_t BUDDY_SYNC_INDEX = 0;
@@ -65,7 +79,7 @@ uint32_t MY_SYNC_INDEX = 0;
 
 /*Global variable used by bin_to_file method to put bits back together
  *in correct order.*/
-unsigned long REBUILD_INDEX = 32;
+unsigned long REBUILD_INDEX = 64;
 
 /*Verbosity level
 * 0 - None (Default)
@@ -205,6 +219,34 @@ void summary(int option_flags){
 
     printf("Total time: %.2f %s",total_time_ms, time_unit);
     printf("\n##############################\n");
+
+}
+
+uint64_t build_header(){
+    uint64_t header = S_DATA_LENGTH;
+    uint16_t crc;
+    uint8_t *p_len = (uint8_t *) &header;
+    
+    // Signal compression
+    header <<= 1;
+    if((GLOBAL_OPTIONS & COMPRESS_FLAG) == COMPRESS_FLAG)
+        header |= 1;
+
+    // Signal encryption
+    header <<= 1;
+    if ((GLOBAL_OPTIONS & ENCRYPTION_FLAG) == ENCRYPTION_FLAG)
+        header |= 1;
+
+    //Signal fwd. error correction
+    header <<= 1;
+    if((GLOBAL_OPTIONS & FEC_FLAG) == FEC_FLAG)
+        header |= 1;
+
+    crc = crc16(0, p_len, sizeof(uint32_t));
+    header = header << 16;
+    header |= crc;
+
+    return header;
 
 }
 
@@ -408,6 +450,7 @@ void sender_thread(int *fd) {
                 pthread_mutex_unlock(&SENDER_LOCK);
             } else {
                 CURRENT_SERVER = config->name_server;
+                S_HEADER = build_header();
                 END_WORKERS = 1;
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
@@ -415,24 +458,25 @@ void sender_thread(int *fd) {
         nanosleep(&sleep_time, &rem);
     }
 
-    while (S_LENGTH_INDEX <= S_LENGTH_INDEX_STOP){
+    // Write message length
+    while (S_HEADER_INDEX <= S_HEADER_INDEX_STOP){
 //        printf("writing header %d to %s \n", S_DATA_LENGTH, CURRENT_SERVER->server);
         if ((pthread_mutex_trylock(&SENDER_LOCK)) == 0){
             set_root_server();
-            bitmask = 1 << S_LENGTH_INDEX_REL;
-            if(bitmask == (bitmask & S_DATA_LENGTH)){
+            bitmask = 1 << S_HEADER_INDEX_REL;
+            if(bitmask == (bitmask & S_HEADER)){
                 strncpy(query.domain_name, prefix, prefix_len);
-                compose_name(query.domain_name, S_LENGTH_INDEX);
-                //printf("Writing header %d %s\n",S_LENGTH_INDEX, query.domain_name);
+                compose_name(query.domain_name, S_HEADER_INDEX);
+                //printf("Writing header %d %s\n",S_HEADER_INDEX, query.domain_name);
                 query.name_server = CURRENT_SERVER->server;
-                S_LENGTH_INDEX++;
-                S_LENGTH_INDEX_REL++;
+                S_HEADER_INDEX++;
+                S_HEADER_INDEX_REL++;
 //                CURRENT_SERVER = CURRENT_SERVER->next;
                 pthread_mutex_unlock(&SENDER_LOCK);
                 exec_query(&query);
             }else{
-                S_LENGTH_INDEX++;
-                S_LENGTH_INDEX_REL++;
+                S_HEADER_INDEX++;
+                S_HEADER_INDEX_REL++;
 //                CURRENT_SERVER = CURRENT_SERVER->next;
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
@@ -908,9 +952,9 @@ void free_sample_times() {
     free(sample_times);
 }
 
-void get_data_length() {
+void read_header() {
     /*
-     * Function reads first 4 bytes of message starting at sequence number of R_LENGTH_INDEX to determine overall
+     * Function reads first 4 bytes of message starting at sequence number of R_HEADER_INDEX to determine overall
      * length of message (in bits) whch is then set to R_DATA_LENGTH
      *
      * NOTE: Final length includes also first 4 bytes used as length header.
@@ -918,10 +962,13 @@ void get_data_length() {
     struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
     int result;
-    int index_stop = R_LENGTH_INDEX + 32;
+    int index_stop = R_HEADER_INDEX + 64;
     int relative_index = 0;
     char *prefix;
     size_t prefix_len;
+    uint64_t header = 0;
+    uint16_t crc;
+    uint8_t flag;
 
     if(!prefix_config.my_data_prefix){
         prefix = malloc(1);
@@ -934,20 +981,45 @@ void get_data_length() {
 
     R_DATA_LENGTH = 0;
     set_root_server();
-    for (R_LENGTH_INDEX; R_LENGTH_INDEX < index_stop; R_LENGTH_INDEX++) {
+    for (R_HEADER_INDEX; R_HEADER_INDEX < index_stop; R_HEADER_INDEX++) {
         strncpy(query.domain_name, prefix, prefix_len);
-        compose_name(query.domain_name, R_LENGTH_INDEX);
+        compose_name(query.domain_name, R_HEADER_INDEX);
         query.name_server = CURRENT_SERVER->server;
         result = config->method(&query);
         //printf("Position %s, result %d\n",query.domain_name, result);
-        R_DATA_LENGTH = (R_DATA_LENGTH | (result << relative_index));
+        header = (header | (result << relative_index));
         relative_index++;
     }
-//    printf("Data leghtn %d\n",R_DATA_LENGTH);
-    R_DATA_LENGTH += 32;
-//    printf("Data leghtn %d\n",R_DATA_LENGTH);
+    
+    // TODO: Check checksum
+    // Extract header crc
+    crc = header & 0xFFFF;
+    header = header >> 16;
+    
+    //Extract fwd. error correction flag
+    flag = header & 0x1;
+    header >>= 1;
+    if (flag)
+        GLOBAL_OPTIONS += FEC_FLAG;
+
+    //Extract encryption flag
+    flag = header & 0x1;
+    header >>= 1;
+    if (flag)
+        GLOBAL_OPTIONS += ENCRYPTION_FLAG;
+
+    //Extract compression flag
+    flag = header & 0x1;
+    header >>= 1;
+    if (flag)
+        GLOBAL_OPTIONS += COMPRESS_FLAG;
+
+    R_DATA_LENGTH = header;
+
+    //TODO: NOtify user about flag discrepancies
+    //printf("d_len %u \n crc %04x\n flags %d\n", R_DATA_LENGTH, crc, GLOBAL_OPTIONS);
+    R_DATA_LENGTH += 64;
     R_DATA_END += R_DATA_LENGTH;
-//    printf("%d\n",R_DATA_LENGTH);
     CURRENT_SERVER = config->name_server;
     free(query.domain_name);
 }
@@ -1118,10 +1190,10 @@ void interactive_sender(){
         join_threads(workers);
         set_sync_bit();
 
-        S_LENGTH_INDEX_REL = 0;
-        S_LENGTH_INDEX = S_BIT_INDEX;
-        S_LENGTH_INDEX_STOP = S_LENGTH_INDEX + 31;
-        S_BIT_INDEX = S_LENGTH_INDEX + 32;
+        S_HEADER_INDEX_REL = 0;
+        S_HEADER_INDEX = S_BIT_INDEX;
+        S_HEADER_INDEX_STOP = S_HEADER_INDEX + 31;
+        S_BIT_INDEX = S_HEADER_INDEX + 32;
         S_DATA_LENGTH = 0;
         END_WORKERS = 0;
     }
@@ -1144,7 +1216,7 @@ void interactive_listener(){
         pipe(bit_pipe);
         pipe(display_pipe);
         wait_for_sync_bit();
-        get_data_length();
+        read_header();
 //        printf("Data length: %d\n",R_DATA_LENGTH);
 //        printf("\n*Recieving message*\n");
         set_status(&STAT_RECIEVING);
@@ -1157,7 +1229,7 @@ void interactive_listener(){
         close(bit_pipe[0]);
         close(bit_pipe[1]);
 
-        R_LENGTH_INDEX = R_BIT_INDEX;
+        R_HEADER_INDEX = R_BIT_INDEX;
         R_BIT_INDEX = R_BIT_INDEX + 32;
         REBUILD_INDEX = R_BIT_INDEX;
         set_status(&STAT_IDLE);
@@ -1215,12 +1287,12 @@ int decryptor(void **args) {
     return total_bits;
 }
 
-int reading_mode(int option_flags){
+int reading_mode(){
     FILE *output_fp = fopen(config->output_file, "wb");
     int output_fd = fileno(output_fp);
     printf("Retrieving data...\n");
     calibrate();
-    get_data_length();
+    read_header();
 
     int binary_pipe[2];
     pipe(binary_pipe);
@@ -1236,7 +1308,7 @@ int reading_mode(int option_flags){
     global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
 
-    if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
+    if ((GLOBAL_OPTIONS & COMPRESS_FLAG) == COMPRESS_FLAG) {
         void *decompres_args[2] = {output_fd, data_pipe[0]};
         pthread_create(&decompres_td, NULL, (int) inflate_data, (void *) decompres_args);
 
@@ -1250,8 +1322,8 @@ int reading_mode(int option_flags){
         join_threads(workers_td);
     }
 
-    else if ((option_flags & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
-       void *args[2] = {data_pipe[1], binary_pipe[0]};
+    else if ((GLOBAL_OPTIONS & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
+        void *args[2] = {data_pipe[1], binary_pipe[0]};
         pthread_create(&rebuild_td, NULL, (int) bin_to_file, (void *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
@@ -1265,7 +1337,7 @@ int reading_mode(int option_flags){
         pthread_join(decompres_td, &global_stat.total_data_bits);
         join_threads(workers_td);
  
-    } else if ((option_flags & FEC_FLAG) == FEC_FLAG){
+    } else if ((GLOBAL_OPTIONS & FEC_FLAG) == FEC_FLAG){
         int *args[2] = {output_fd, binary_pipe[0]};
         pthread_create(&rebuild_td, NULL, (int) hamming74_bin_to_file, (int *) args);
 
@@ -1295,7 +1367,7 @@ int reading_mode(int option_flags){
     return(EXIT_SUCCESS);
 }
 
-int sending_mode(int option_flags){
+int sending_mode(){
     FILE *fp;
     if (strcmp(config->input_file, "-") == 0) {
 //            printf("Type in your message (end with ^D):  ");
@@ -1335,7 +1407,7 @@ int sending_mode(int option_flags){
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
     global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
-    if ((option_flags & COMPRESS_FLAG) == COMPRESS_FLAG) {
+    if ((GLOBAL_OPTIONS & COMPRESS_FLAG) == COMPRESS_FLAG) {
         void *compres_args[2] = {data_pipe[1], fp};
         pthread_create(&filestream_td, NULL, (int) compresor, (void *) compres_args);
 
@@ -1345,7 +1417,7 @@ int sending_mode(int option_flags){
         pthread_join(filestream_td, &global_stat.total_data_bits);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
-    } else if ((option_flags & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
+    } else if ((GLOBAL_OPTIONS & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
         void *encrypt_args[2] = {data_pipe[1], fp};
         pthread_create(&filestream_td, NULL, (int) encryptor, (void *) encrypt_args);
 
@@ -1355,7 +1427,7 @@ int sending_mode(int option_flags){
         pthread_join(filestream_td, &global_stat.total_data_bits);
         pthread_join(bitstream_td, NULL);
         close(data_pipe[0]);
-    }else if ((option_flags & FEC_FLAG) == FEC_FLAG){
+    }else if ((GLOBAL_OPTIONS & FEC_FLAG) == FEC_FLAG){
         int *stream_args[2] = {input_fd, binary_pipe[1]};
         pthread_create(&bitstream_td, NULL, (int) hamming74_encode_stream, (int *) stream_args);
 
@@ -1419,7 +1491,7 @@ int main(int argc, char **argv) {
                     //If method is not set, use default
                     config->method = &iscached_time;
                 }
-                option_flags += INTERACTIVE_FLAG;
+                GLOBAL_OPTIONS += INTERACTIVE_FLAG;
                 break;
             case 't':
                 //testing option
@@ -1434,19 +1506,19 @@ int main(int argc, char **argv) {
             case 'D':
             case 'C':
                 //Are we gonna (de)compress?
-                option_flags += COMPRESS_FLAG;
+                GLOBAL_OPTIONS += COMPRESS_FLAG;
                 break;
             case 'e':
                 //Encryption used
-                option_flags += ENCRYPTION_FLAG;
+                GLOBAL_OPTIONS += ENCRYPTION_FLAG;
                 break;
             case 'f':
-                option_flags += FEC_FLAG;
+                GLOBAL_OPTIONS += FEC_FLAG;
                 break;
             case 's':
                 //program is to send data. If source file is -, open stdin
                 config->input_file = set_member(optarg, strlen(optarg));
-                option_flags += SEND_FLAG;
+                GLOBAL_OPTIONS += SEND_FLAG;
                 config->output_file = set_member("\0", strlen("\0"));
                 break;
 
@@ -1457,7 +1529,7 @@ int main(int argc, char **argv) {
                     //If method is not set, use default
                     config->method = &iscached_time;
                 }
-                option_flags += READ_FLAG;
+                GLOBAL_OPTIONS += READ_FLAG;
                 break;
             case 'm':
                 //define method which is used to determine if bit was cached or no
@@ -1481,7 +1553,7 @@ int main(int argc, char **argv) {
                 return (EXIT_FAILURE);
         }
     }
-    if ((option_flags & READ_FLAG) == READ_FLAG && (option_flags & SEND_FLAG) == SEND_FLAG) {
+    if ((GLOBAL_OPTIONS & READ_FLAG) == READ_FLAG && (GLOBAL_OPTIONS & SEND_FLAG) == SEND_FLAG) {
         printf("You can't (-s)end and (-r)ecieve at same time, your options do not make sense\n");
         help();
         return (EXIT_FAILURE);
@@ -1489,12 +1561,12 @@ int main(int argc, char **argv) {
 
     read_conf_file();
 
-    if ((option_flags & INTERACTIVE_FLAG) == INTERACTIVE_FLAG){
+    if ((GLOBAL_OPTIONS & INTERACTIVE_FLAG) == INTERACTIVE_FLAG){
         exit_status = interactive_mode();
-    }else if ((option_flags & SEND_FLAG) == SEND_FLAG) {
-        exit_status = sending_mode(option_flags);
-    }else if ((option_flags & READ_FLAG) == READ_FLAG) {
-        exit_status = reading_mode(option_flags);
+    }else if ((GLOBAL_OPTIONS & SEND_FLAG) == SEND_FLAG) {
+        exit_status = sending_mode();
+    }else if ((GLOBAL_OPTIONS & READ_FLAG) == READ_FLAG) {
+        exit_status = reading_mode();
     }else{
         help();
     }
