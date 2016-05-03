@@ -495,7 +495,7 @@ void join_threads(pthread_t *threads) {
      *      (pthread_t *) threads   - pointer to array of 10 pthread_t
      */
     int i, check;
-    for (i = 0; i < 10; i++) {
+    for (i = 0; i < 5; i++) {
         //printf("WAITING FOR thread %u\n",threads[i]);
         check = pthread_join(threads[i], NULL);
         //printf("JOINED thread %u with status %d\n",threads[i], check);
@@ -516,9 +516,9 @@ pthread_t *create_senders(int *fd) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-    pthread_t *threads = malloc(sizeof(pthread_t) * 10);
+    pthread_t *threads = malloc(sizeof(pthread_t) * 5);
 
-    for (i = 0; i < 10; i++) {
+    for (i = 0; i < 5; i++) {
         pthread_create(&threads[i], &attr, (void *) sender_thread, fd);
         //printf("Original thread %u\n",threads[i]);
 
@@ -606,9 +606,9 @@ pthread_t *create_retrievers(int *fd) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-    pthread_t *threads = malloc(sizeof(pthread_t) * 10);
+    pthread_t *threads = malloc(sizeof(pthread_t) * 5);
 
-    for (i = 0; i < 10; i++) {
+    for (i = 0; i < 5; i++) {
         pthread_create(&threads[i], &attr, (void *)retriever_thread, fd);
         //printf("Original thread %u\n",threads[i]);
 
@@ -703,7 +703,8 @@ int iscached_time(struct query_t *query) {
 }
 
 int iscached_ttl(struct query_t *query) {
-    int ttl = exec_query_ttl(query);
+    int ttl;
+    ttl = exec_query_ttl(query);
     int result;
     if (ttl < ttl_reference){
         result = 1;
@@ -1049,14 +1050,12 @@ void calibrate() {
         // No need to calibrate here
     }
     else if(config->method == iscached_ttl){
-        printf("Calibrating ttl\n");
         query.name_server = servers->server;
         strcpy(query.domain_name, "precise.\0");
         compose_name(query.domain_name, (unsigned long) rand());
-        printf("Calibrating ttl\n");
  
         ttl_reference =  exec_query_ttl(&query);
-        printf("Calibrating ttl\n");
+        //printf("TTL ref: %d\n",ttl_reference);
     }
 
 /*	printf("Cached:");
