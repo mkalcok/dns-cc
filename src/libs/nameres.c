@@ -163,7 +163,7 @@ int exec_query_ttl(struct query_t *query) {
     options.servers = server_addr;
     options.nservers = 1;
     ares_channel channel;
-    if ((res = ares_init_options(&channel, &options, (ARES_OPT_SERVERS | ARES_OPT_FLAGS))) != ARES_SUCCESS) {
+    if ((res = ares_init_options(&channel, &options, ARES_OPT_SERVERS )) != ARES_SUCCESS) {
         printf("ares failed: %d\n", res);
         return 1;
     }
