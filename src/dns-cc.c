@@ -63,7 +63,7 @@ uint32_t S_BIT_INDEX = 64;
 uint64_t S_DATA_LENGTH;
 uint64_t S_HEADER;
 uint32_t S_HEADER_INDEX = 0;
-uint32_t S_HEADER_INDEX_REL = 0;
+uint64_t S_HEADER_INDEX_REL = 0;
 uint32_t S_HEADER_INDEX_STOP = 63;
 uint16_t S_HEADER_CRC;
 
@@ -407,7 +407,7 @@ void sender_thread(int *fd) {
     char c;
     char *prefix;
     size_t prefix_len;
-    int bitmask;
+    uint64_t bitmask;
     ssize_t check;
     struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
@@ -455,15 +455,14 @@ void sender_thread(int *fd) {
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
-        nanosleep(&sleep_time, &rem);
+        //nanosleep(&sleep_time, &rem);
     }
-
     // Write message length
     while (S_HEADER_INDEX <= S_HEADER_INDEX_STOP){
 //        printf("writing header %d to %s \n", S_DATA_LENGTH, CURRENT_SERVER->server);
         if ((pthread_mutex_trylock(&SENDER_LOCK)) == 0){
             set_root_server();
-            bitmask = 1 << S_HEADER_INDEX_REL;
+            bitmask = (uint64_t)1 << S_HEADER_INDEX_REL;
             if(bitmask == (bitmask & S_HEADER)){
                 strncpy(query.domain_name, prefix, prefix_len);
                 compose_name(query.domain_name, S_HEADER_INDEX);
@@ -481,7 +480,7 @@ void sender_thread(int *fd) {
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
-        nanosleep(&sleep_time, &rem);
+        //nanosleep(&sleep_time, &rem);
     }
     free(query.domain_name);
     return;
@@ -566,7 +565,7 @@ void retriever_thread(int *fd) {
                 pthread_mutex_unlock(&RETRIEVER_LOCK);
                 break;}
 
-            nanosleep(&sleep_time, &rem);
+            //nanosleep(&sleep_time, &rem);
             my_bit = R_BIT_INDEX;
             query.name_server = CURRENT_SERVER->server;
             R_BIT_INDEX++;
@@ -961,7 +960,7 @@ void read_header() {
      */
     struct query_t query;
     query.domain_name = calloc(255, sizeof(char));
-    int result;
+    uint64_t result;
     int index_stop = R_HEADER_INDEX + 64;
     int relative_index = 0;
     char *prefix;
@@ -990,7 +989,6 @@ void read_header() {
         header = (header | (result << relative_index));
         relative_index++;
     }
-    
     // TODO: Check checksum
     // Extract header crc
     crc = header & 0xFFFF;
