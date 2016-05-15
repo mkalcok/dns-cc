@@ -1,22 +1,28 @@
 ---
 - hosts: authority-ns
   tasks:
+  - name: Delete previous traffic controll rules
+    become: yes
+    become_method: sudo
+    command: tc qdisc del dev eth2 root
+    ignore_errors: yes
+
   - name: Activate delay on cache <-> name server link
     become: yes
     become_method: sudo
-    command: "{{ item }}"
-    with_items: 
-    - tc qdisc del dev eth2 root
-    - tc qdisc add dev eth2 root netem delay 20ms 5ms
+    command: tc qdisc add dev eth2 root netem delay 20ms 5ms
 
 - hosts: cache-ns
   tasks:
+  - name: Delete previous traffic controll rules
+    become: yes
+    become_method: sudo
+    command: "tc qdisc del dev eth1 root"
+    ignore_errors: yes
+
   - name: Activate delay on client <-> cache link
     become: yes
     become_method: sudo
-    command: "{{ item }}"
-    with_items: 
-    - tc qdisc del dev eth1 root
-    - tc qdisc add dev eth1 root netem delay 35ms 5ms
+    command: "tc qdisc add dev eth1 root netem delay 35ms 5ms"
 
 
