@@ -20,7 +20,19 @@
 #include "libs/fec.h"
 #include "libs/crc.h"
 #include <errno.h>
+
+#ifdef __linux__
+
 #include <time.h>
+
+#endif
+
+#ifdef __APPLE__
+
+#include <mach/mach.h>
+#include <mach/clock.h>
+
+#endif
 /*
  * 
  */
@@ -1356,10 +1368,19 @@ int reading_mode(){
     pthread_t decompres_td = {0};
 
     // Start time measurment
+#ifdef __linux__
     struct timespec tv;
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
     global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
+#endif
 
+#ifdef __APPLE__
+    mach_timespec_t tv;
+    clock_serv_t cclock;
+    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+    clock_get_time(cclock, &tv);
+    global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
+#endif
 
     if ((GLOBAL_OPTIONS & COMPRESS_FLAG) == COMPRESS_FLAG) {
         void *decompres_args[2] = {output_fd, data_pipe[0]};
@@ -1409,7 +1430,19 @@ int reading_mode(){
     }
 
     // End time measurment
+#ifdef __linux__
+
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+
+#endif
+
+#ifdef __APPLE__
+
+    clock_get_time(cclock, &tv);
+    mach_port_deallocate(mach_task_self(), cclock);
+
+#endif
+
     global_stat.end_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
     printf("Done Reading\n");
@@ -1456,8 +1489,21 @@ int sending_mode(){
     workers_td = create_senders(&binary_pipe[0]);
     
     // Start time measurment
+
+#ifdef __linux__
     struct timespec tv;
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+    global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
+#endif
+
+#ifdef __APPLE__
+    mach_timespec_t tv;
+    clock_serv_t cclock;
+    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+    clock_get_time(cclock, &tv);
+    global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
+#endif
+
     global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
     if ((GLOBAL_OPTIONS & COMPRESS_FLAG) == COMPRESS_FLAG) {
@@ -1500,7 +1546,19 @@ int sending_mode(){
     join_threads(workers_td);
 
     // End time measurment
+#ifdef __linux__
+
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
+
+#endif
+
+#ifdef __APPLE__
+
+    clock_get_time(cclock, &tv);
+    mach_port_deallocate(mach_task_self(), cclock);
+
+#endif
+
     global_stat.end_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 
 
