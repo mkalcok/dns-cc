@@ -1,0 +1,20 @@
+For build instructions see INSTALL.
+
+After succesfull build you have executable file "dns-cc" that is ready to 
+be used. You can place this file anywhere you like, it is not dependent
+on any other files except config file.
+Config file, "dns.cfg" is located in src directory, in project root. It
+already contains sample configuration. By default, dns-cc looks for this
+config file in /etc/dns-cc/ directory. If you do not wish to place it there,
+you will have to specify location of config file manually each time you run 
+dns-cc.
+
+For more information on how to run dns-cc see help via "dns-cc -v".
+
+Test Enviroment:
+For testing purposes, this distribution contains Vagrantfile that serves as
+configuration file for vagrant tool. You can run "vagrant up" in project root
+to spawn testing environment.
+This environment consists of three virtual machines that each server as DNS
+server. Sample config file provided in src folder works out of the box with
+this testing envirnment.

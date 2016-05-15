@@ -1,0 +1,26 @@
+Quick guide how to compile tool for covert DNS channel.
+
+1. Prerequisites
+You are going to need following build tools:
+
+Cmake <=3.5.1
+GNU make <= 3.81
+
+You are going to need dev. versions of following libraries:
+
+ncurses (>=5.9)
+c-ares (>=1.10.0)
+openssl (>=1.0.0)
+zlib (>=0.9)
+
+2. Installation
+We recommend you to use "out of source" build when using CMake to
+keep source code hierarchy clean.
+
+Enter build folder in project root directory and run following commands
+
+cmake ..
+make
+
+Now your build directory contains "dns-cc" executable file that is ready to 
+be used. 
