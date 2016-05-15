@@ -9,5 +9,5 @@ int _SHA_DIGEST_LEN;
 
 int decrypt_stream(int input_fd, int output_fd, char *passphrase);
 int encrypt_stream(int input_fd, int output_fd, char *passphrase);
-void get_checksum(int input_fd, unsigned char *md);
+void sha1_block_sum(unsigned char *buf, int buf_len, unsigned char *sum);
 #endif //DNS_CC_CRYPTO_H

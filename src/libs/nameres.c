@@ -95,11 +95,12 @@ void main_loop(ares_channel channel) {
     }
 }
 
-int exec_query(struct query_t *query) {
+unsigned int exec_query(struct query_t *query) {
     unsigned long timer[2] = {0, 0};
     struct ares_options options;
 //    struct timespec tv;
-    int res, delay;
+    int res;
+    unsigned int delay;
     struct in_addr *server_addr = malloc(sizeof(struct in_addr));
     inet_aton(query->name_server, server_addr);
     options.servers = server_addr;
@@ -112,8 +113,8 @@ int exec_query(struct query_t *query) {
     //ares_gethostbyname(channel, name, AF_INET, dns_callback, NULL);
     //main_loop(channel);
     //TODO:Make it atomic!!!!
-    ares_query(channel, query->domain_name, 1, 1, (ares_callback) time_query_cb, &timer[1]);
 
+    ares_query(channel, query->domain_name, 1, 1, (ares_callback) time_query_cb, &timer[1]);
 #ifdef __linux__
     struct timespec tv;
     clock_gettime(CLOCK_MONOTONIC_RAW, &tv);
@@ -129,7 +130,8 @@ int exec_query(struct query_t *query) {
 
     timer[0] = (unsigned long) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
     main_loop(channel);
-    delay = (int) (timer[1] - timer[0]);
+    delay = (unsigned int) (timer[1] - timer[0]);
+    //printf("Timer 1 %lu, TImer 2 - %lu, delay %u \n", timer[1], timer[0], delay);
     ares_destroy(channel);
     free(server_addr);
     return delay;

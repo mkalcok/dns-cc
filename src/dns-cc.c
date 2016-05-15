@@ -77,7 +77,7 @@ uint32_t R_HEADER_INDEX = 0;
 uint32_t BUDDY_SYNC_INDEX = 0;
 uint32_t MY_SYNC_INDEX = 0;
 
-/*Global variable used by bin_to_file method to put bits back together
+/*Global variable used by bits_to_stream method to put bits back together
  *in correct order.*/
 unsigned long REBUILD_INDEX = 64;
 
@@ -86,6 +86,9 @@ unsigned long REBUILD_INDEX = 64;
 * 1 - Debug
 */
 unsigned char VERBOSITY = 0;
+
+// Number of Threads used for sending/recieving
+int THREADS_USED = 7;
 
 //Structure to hold assigned prefixes in interactive mode
 typedef struct prefix_config_t {
@@ -134,7 +137,7 @@ typedef struct sample {
 
 static struct sample *sample_times;
 
-int ttl_reference;
+unsigned int ttl_reference;
 
 //Global variables used to control loops in separate threads
 int END_WORKERS = 0;
@@ -212,7 +215,7 @@ void summary(int option_flags){
             "Pure data: %d b\n"
             "Transport ratio: %.2f %\n", global_stat.total_bits_transmited, global_stat.total_data_bits, overhead);
 
-    if (((option_flags & READ_FLAG) == READ_FLAG) && ((option_flags & FEC_FLAG) == FEC_FLAG) ){
+    if (((GLOBAL_OPTIONS & READ_FLAG) == READ_FLAG) && ((GLOBAL_OPTIONS & FEC_FLAG) == FEC_FLAG) ){
         printf("Errors fixed: %d\n",  global_stat.errors);
 
     }
@@ -345,7 +348,7 @@ int hamming74_bin_to_file(void **args) {
     close(output_fd);
     return total_bits;
 }
-int bin_to_file(void **args) {
+int bits_to_stream(void **args) {
     /*
      * Function used to rebuild recieved bits back into bytes in correct order.
      * It is responsible for incrementing REBUILD_INDEX that is used by retriever_thread()
@@ -402,7 +405,7 @@ void sender_thread(int *fd) {
      * Arguments:
      *      (int *) fd  - pointer to file descriptor that is reading end of pipe
      */
-    const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
+    const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = (config->max_speed * 1000000)};
     struct timespec rem;
     char c;
     char *prefix;
@@ -455,7 +458,7 @@ void sender_thread(int *fd) {
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
-        //nanosleep(&sleep_time, &rem);
+        nanosleep(&sleep_time, &rem);
     }
     // Write message length
     while (S_HEADER_INDEX <= S_HEADER_INDEX_STOP){
@@ -480,7 +483,7 @@ void sender_thread(int *fd) {
                 pthread_mutex_unlock(&SENDER_LOCK);
             }
         }
-        //nanosleep(&sleep_time, &rem);
+        nanosleep(&sleep_time, &rem);
     }
     free(query.domain_name);
     return;
@@ -495,7 +498,7 @@ void join_threads(pthread_t *threads) {
      *      (pthread_t *) threads   - pointer to array of 10 pthread_t
      */
     int i, check;
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < THREADS_USED; i++) {
         //printf("WAITING FOR thread %u\n",threads[i]);
         check = pthread_join(threads[i], NULL);
         //printf("JOINED thread %u with status %d\n",threads[i], check);
@@ -516,9 +519,9 @@ pthread_t *create_senders(int *fd) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-    pthread_t *threads = malloc(sizeof(pthread_t) * 5);
+    pthread_t *threads = malloc(sizeof(pthread_t) * THREADS_USED);
 
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < THREADS_USED; i++) {
         pthread_create(&threads[i], &attr, (void *) sender_thread, fd);
         //printf("Original thread %u\n",threads[i]);
 
@@ -538,7 +541,7 @@ void retriever_thread(int *fd) {
      * Arguments:
      *      (int*) fd   - pointer to a file descriptor (writing end of pipe)
      */
-    const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 1000};
+    const struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = (config->max_speed * 1000000)};
     struct timespec rem;
     int result;
     char c;
@@ -565,7 +568,7 @@ void retriever_thread(int *fd) {
                 pthread_mutex_unlock(&RETRIEVER_LOCK);
                 break;}
 
-            //nanosleep(&sleep_time, &rem);
+            nanosleep(&sleep_time, &rem);
             my_bit = R_BIT_INDEX;
             query.name_server = CURRENT_SERVER->server;
             R_BIT_INDEX++;
@@ -606,9 +609,9 @@ pthread_t *create_retrievers(int *fd) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-    pthread_t *threads = malloc(sizeof(pthread_t) * 5);
+    pthread_t *threads = malloc(sizeof(pthread_t) * THREADS_USED);
 
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < THREADS_USED; i++) {
         pthread_create(&threads[i], &attr, (void *)retriever_thread, fd);
         //printf("Original thread %u\n",threads[i]);
 
@@ -678,25 +681,29 @@ int iscached_time(struct query_t *query) {
      *      (query_t*) query    - structure that holds information about query (domain_name, name_server)
      */
 
-    int delay = exec_query(query);
+    float delay;
     //printf("[%u] delay: %d\n", pthread_self(), delay);
-    double distance = 0;
+    float distance = 0;
     float cached_score = 0;
     float uncached_score = 0;
     int i;
 
+    delay = (float) exec_query(query);
+    //printf("outer delay %u\n",delay);
     for (i = 0; i < config->precision; i++) {
         if (delay == sample_times->cached_set[i]) { continue; }
-        distance = 1.0 / (delay - sample_times->cached_set[i]);
+        distance = (float) 1.0 / (delay - sample_times->cached_set[i]);
         cached_score += absolute_value(distance);
 
         if (delay == sample_times->uncached_set[i]) { continue; }
-        distance = 1.0 / (delay - sample_times->uncached_set[i]);
+        distance = (float) 1.0 / (delay - sample_times->uncached_set[i]);
         uncached_score += absolute_value(distance);
     }
     if (cached_score > uncached_score) {
+        //printf("Delay - %f cached score - %f uncached score - %f result - 1\n", delay, cached_score, uncached_score);
         return (1);
     } else {
+        //printf("Delay - %f cached score - %f uncached score - %f result - 0\n", delay- cached_score, uncached_score);
         return (0);
     }
 
@@ -777,7 +784,19 @@ void help() {
 /*This Function will display help and usage information
  *XXX:Replace dummy text with actual help
  */
-    printf("\nOne day, this will be nice help :)\n");
+    printf("\nDNS covert channel usage:\n");
+    printf("dns-cc [OPRIONS] [ACTION]\n\n");
+    printf("OPTIONS category contains:\n");
+    printf("\t -c FILE\tDefines config file from default to FILE\n");
+    printf("\t -C \t\tUse compression when sending data\n");
+    printf("\t -f \t\tUse forward error correction when sending data\n");
+    printf("\t -e \t\tUse encryption when sending data\n");
+    printf("\t -m METHOD \tDefines method used when reading message. Available methods are 'time', 'ttl' and 'iterative'\n\n");
+    printf("ACTION category contains:\n");
+    printf("\t -s FILE\tSend FILE via covert DNS channel\n");
+    printf("\t -r FILE\tRead message via covert DNS channel and write it into FILE\n");
+    printf("\t -i\t\tStart covert DNS channel in interactive mode\n");
+    printf("\t -h \t\tDisplay this help\n");
 }
 
 void remove_blank(char *str) {
@@ -892,10 +911,33 @@ void set_conf(char *var, char *value) {
         config->precision = atoi(value);
         return;
     }
-    if (strcasecmp(var, "max_speed") == 0) {
+    if (strcasecmp(var, "QueryDelay") == 0) {
         config->max_speed = atoi(value);
         return;
     }
+    if (strcasecmp(var, "Encryption") == 0) {
+        if(strcasecmp(value, "yes") == 0){
+            GLOBAL_OPTIONS += ENCRYPTION_FLAG;
+        }
+        return;
+    }
+    if (strcasecmp(var, "Compression") == 0) {
+        if(strcasecmp(value, "yes") == 0){
+            GLOBAL_OPTIONS += COMPRESS_FLAG;
+        }
+        return;
+    }
+    if (strcasecmp(var, "ErrorCorrection") == 0) {
+        if(strcasecmp(value, "yes") == 0){
+            GLOBAL_OPTIONS += FEC_FLAG;
+        }
+        return;
+    }
+    if (strcasecmp(var, "Threads") == 0) {
+        THREADS_USED = atoi(value);
+        return;
+    }
+    
 
 
 }
@@ -967,7 +1009,8 @@ void read_header() {
     char *prefix;
     size_t prefix_len;
     uint64_t header = 0;
-    uint16_t crc;
+    uint8_t *p_header_byte = (uint8_t *) &header;
+    uint16_t crc, local_crc;
     uint8_t flag;
 
     if(!prefix_config.my_data_prefix){
@@ -990,11 +1033,14 @@ void read_header() {
         header = (header | (result << relative_index));
         relative_index++;
     }
-    // TODO: Check checksum
     // Extract header crc
     crc = header & 0xFFFF;
     header = header >> 16;
-    
+    local_crc = crc16(0, p_header_byte, sizeof(uint32_t));
+    if (crc != local_crc){
+        printf("Header corruption, reading failed.\n");
+        exit(1);
+    }
     //Extract fwd. error correction flag
     flag = header & 0x1;
     header >>= 1;
@@ -1045,6 +1091,16 @@ void calibrate() {
             sample_times->cached_set[i] = exec_query(&query);
             servers = servers->next;
         }
+     /*   printf("Uncached set: \n");
+      *  for (i = 0; i < config->precision; i++){
+      *      printf("%d\n", sample_times->uncached_set[i]);
+      *  }
+      *
+      *  printf("Cached set: \n");
+      *  for (i = 0; i < config->precision; i++){
+      *      printf("%d\n", sample_times->cached_set[i]);
+      *  }
+      */
     }
     else if(config->method == iscached_iter){
         // No need to calibrate here
@@ -1055,7 +1111,7 @@ void calibrate() {
         compose_name(query.domain_name, (unsigned long) rand());
  
         ttl_reference =  exec_query_ttl(&query);
-        //printf("TTL ref: %d\n",ttl_reference);
+        printf("TTL ref: %d\n",ttl_reference);
     }
 
 /*	printf("Cached:");
@@ -1218,7 +1274,7 @@ void interactive_listener(){
 //        printf("\n*Recieving message*\n");
         set_status(&STAT_RECIEVING);
         void *stream_args[2] = {display_pipe[1], bit_pipe[0]};
-        pthread_create(&stream,NULL,(void *) bin_to_file, (void *) stream_args);
+        pthread_create(&stream, NULL, (void *) bits_to_stream, (void *) stream_args);
         workers = create_retrievers(&bit_pipe[1]);
         connect_display_output(display_pipe[0]);
         pthread_join(stream, NULL);
@@ -1310,7 +1366,7 @@ int reading_mode(){
         pthread_create(&decompres_td, NULL, (int) inflate_data, (void *) decompres_args);
 
         void *args[2] = {data_pipe[1], binary_pipe[0]};
-        pthread_create(&rebuild_td, NULL, (void *) bin_to_file, (void *) args);
+        pthread_create(&rebuild_td, NULL, (void *) bits_to_stream, (void *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 
@@ -1321,7 +1377,7 @@ int reading_mode(){
 
     else if ((GLOBAL_OPTIONS & ENCRYPTION_FLAG) == ENCRYPTION_FLAG) {
         void *args[2] = {data_pipe[1], binary_pipe[0]};
-        pthread_create(&rebuild_td, NULL, (int) bin_to_file, (void *) args);
+        pthread_create(&rebuild_td, NULL, (int) bits_to_stream, (void *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 
@@ -1344,7 +1400,7 @@ int reading_mode(){
         join_threads(workers_td);
     } else {
         int *args[2] = {output_fd, binary_pipe[0]};
-        pthread_create(&rebuild_td, NULL, (int) bin_to_file, (void *) args);
+        pthread_create(&rebuild_td, NULL, (int) bits_to_stream, (void *) args);
 
         pthread_t *workers_td = create_retrievers(&binary_pipe[1]);
 

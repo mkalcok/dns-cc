@@ -245,17 +245,3 @@ int encrypt_stream(int input_fd, int output_fd, char *passphrase){
     return total_bits;
 }
 
-/*int main(void) {
-	FILE *input_fp = fopen("/tmp/out", "r");
-	FILE *output_fp = fopen("/tmp/out.dec", "w");
-
-	int i_fd = fileno(input_fp);
-	int o_fd = fileno(output_fp);
-	
-	char pass[10] = "hovno";
-	char *p_pass = pass;
-
-	decrypt_stream(i_fd, o_fd, p_pass);
-}
-*/
-

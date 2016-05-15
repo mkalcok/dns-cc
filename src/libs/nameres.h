@@ -19,7 +19,7 @@ void norecurse_query_cb(int *response, int status, int timeouts, unsigned char *
 
 void main_loop(ares_channel channel);
 
-int exec_query(struct query_t *query);
+unsigned int exec_query(struct query_t *query);
 int exec_query_no_recurse(struct query_t *query);
 int exec_query_ttl(struct query_t *query);
 #endif //DNS_CC_NAMERES_H
