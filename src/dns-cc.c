@@ -442,7 +442,6 @@ void sender_thread(int *fd) {
                 pthread_mutex_unlock(&SENDER_LOCK);
                 break;
             }
-
             check = read(*fd, &c, 1);
             if (check > 0) {
                 if (strncmp(&c, "1", 1) == 0) {
@@ -654,7 +653,7 @@ int stream_to_bits(void **args) {
         if (check == -1 && errno == EAGAIN) { continue; }
         else if (check < 1) { break; }
         mask = 128;
-//        printf("%c\n",byte);
+        //printf("%c\n",byte);
         for (i = 0; i < 8; i++) {
             if (byte & mask) {
                 write(output_pipe, "1", 1);
@@ -885,7 +884,7 @@ void set_servers(char *servers) {
     first->next = first;
     config->name_server = first;
     prev = first;
-
+    
     while ((token = strsep(&servers, ","))) {
         //XXX:Valgrind says I'm loosing memory here
         new = calloc(1, sizeof(server_list));
@@ -1487,7 +1486,6 @@ int sending_mode(){
     pthread_t *workers_td;
 //    printf("creating threads\n");
     workers_td = create_senders(&binary_pipe[0]);
-    
     // Start time measurment
 
 #ifdef __linux__
@@ -1501,7 +1499,6 @@ int sending_mode(){
     clock_serv_t cclock;
     host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
     clock_get_time(cclock, &tv);
-    global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
 #endif
 
     global_stat.start_time = (int) ((tv.tv_sec * 1000) + (0.000001 * tv.tv_nsec));
@@ -1535,8 +1532,8 @@ int sending_mode(){
         close(data_pipe[0]);
        
     } else {
-        void *stream_args[2] = {input_fd, binary_pipe[1]};
-        pthread_create(&bitstream_td, NULL, (int) stream_to_bits, (void *) stream_args);
+        int *stream_args[2] = {input_fd, binary_pipe[1]};
+        pthread_create(&bitstream_td, NULL,  (int *) stream_to_bits, (int *) stream_args);
 
 //        pthread_join(filestream_td, NULL);
         pthread_join(bitstream_td, &global_stat.total_data_bits);
@@ -1544,7 +1541,6 @@ int sending_mode(){
     }
 
     join_threads(workers_td);
-
     // End time measurment
 #ifdef __linux__
 
