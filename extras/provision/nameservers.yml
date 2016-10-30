@@ -1,6 +1,12 @@
 ---
 - hosts: authority-ns
   tasks:
+  - name: Update&Upgrade
+    become: yes
+    apt:
+      update_cache: yes
+      upgrade: full
+
   - name: Install DNS Server
     become: yes
     become_method: sudo
@@ -28,6 +34,12 @@
 
 - hosts: cache-ns
   tasks:
+  - name: Update&Upgrade
+    become: yes
+    apt:
+      update_cache: yes
+      upgrade: full
+        
   - name: Install Named Server
     become: yes
     become_method: sudo
